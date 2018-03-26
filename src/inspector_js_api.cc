@@ -230,7 +230,7 @@ static void AsyncTaskScheduledWrapper(const FunctionCallbackInfo<Value>& args) {
 
   CHECK(args[0]->IsString());
   Local<String> task_name = args[0].As<String>();
-  String::Value task_name_value(task_name);
+  String::Value task_name_value(args.GetIsolate(), task_name);
   StringView task_name_view(*task_name_value, task_name_value.length());
 
   CHECK(args[1]->IsNumber());
@@ -296,8 +296,8 @@ void Url(const FunctionCallbackInfo<Value>& args) {
   args.GetReturnValue().Set(OneByteString(env->isolate(), url.c_str()));
 }
 
-void InitInspectorBindings(Local<Object> target, Local<Value> unused,
-                           Local<Context> context, void* priv) {
+void Initialize(Local<Object> target, Local<Value> unused,
+                Local<Context> context, void* priv) {
   Environment* env = Environment::GetCurrent(context);
   {
     auto obj = Object::New(env->isolate());
@@ -341,4 +341,4 @@ void InitInspectorBindings(Local<Object> target, Local<Value> unused,
 }  // namespace node
 
 NODE_BUILTIN_MODULE_CONTEXT_AWARE(inspector,
-                                  node::inspector::InitInspectorBindings);
+                                  node::inspector::Initialize);
