@@ -1,6 +1,7 @@
 #include "inspector_io.h"
 
 #include "inspector_socket_server.h"
+#include "inspector/node_string.h"
 #include "env-inl.h"
 #include "node.h"
 #include "node_crypto.h"
@@ -23,7 +24,7 @@ using AsyncAndAgent = std::pair<uv_async_t, Agent*>;
 using v8_inspector::StringBuffer;
 using v8_inspector::StringView;
 
-template<typename Transport>
+template <typename Transport>
 using TransportAndIo = std::pair<Transport*, InspectorIo*>;
 
 std::string ScriptPath(uv_loop_t* loop, const std::string& script_name) {
@@ -62,31 +63,6 @@ std::string GenerateID() {
   return uuid;
 }
 
-std::string StringViewToUtf8(const StringView& view) {
-  if (view.is8Bit()) {
-    return std::string(reinterpret_cast<const char*>(view.characters8()),
-                       view.length());
-  }
-  const uint16_t* source = view.characters16();
-  const UChar* unicodeSource = reinterpret_cast<const UChar*>(source);
-  static_assert(sizeof(*source) == sizeof(*unicodeSource),
-                "sizeof(*source) == sizeof(*unicodeSource)");
-
-  size_t result_length = view.length() * sizeof(*source);
-  std::string result(result_length, '\0');
-  icu::UnicodeString utf16(unicodeSource, view.length());
-  // ICU components for std::string compatibility are not enabled in build...
-  bool done = false;
-  while (!done) {
-    icu::CheckedArrayByteSink sink(&result[0], result_length);
-    utf16.toUTF8(sink);
-    result_length = sink.NumberOfBytesAppended();
-    result.resize(result_length);
-    done = !sink.Overflowed();
-  }
-  return result;
-}
-
 void HandleSyncCloseCb(uv_handle_t* handle) {
   *static_cast<bool*>(handle->data) = true;
 }
@@ -122,11 +98,11 @@ std::unique_ptr<StringBuffer> Utf8ToStringView(const std::string& message) {
 
 class IoSessionDelegate : public InspectorSessionDelegate {
  public:
-  explicit IoSessionDelegate(InspectorIo* io) : io_(io) { }
-  bool WaitForFrontendMessageWhilePaused() override;
+  explicit IoSessionDelegate(InspectorIo* io, int id) : io_(io), id_(id) { }
   void SendMessageToFrontend(const v8_inspector::StringView& message) override;
  private:
   InspectorIo* io_;
+  int id_;
 };
 
 // Passed to InspectorSocketServer to handle WS inspector protocol events,
@@ -190,8 +166,7 @@ InspectorIo::InspectorIo(Environment* env, v8::Platform* platform,
                          : options_(options), thread_(), delegate_(nullptr),
                            state_(State::kNew), parent_env_(env),
                            thread_req_(), platform_(platform),
-                           dispatching_messages_(false), session_id_(0),
-                           script_name_(path),
+                           dispatching_messages_(false), script_name_(path),
                            wait_for_connect_(wait_for_connect), port_(-1) {
   main_thread_req_ = new AsyncAndAgent({uv_async_t(), env->inspector_agent()});
   CHECK_EQ(0, uv_async_init(env->event_loop(), &main_thread_req_->first,
@@ -222,7 +197,7 @@ bool InspectorIo::Start() {
 }
 
 void InspectorIo::Stop() {
-  CHECK(state_ == State::kAccepting || state_ == State::kConnected);
+  CHECK(state_ == State::kAccepting || !sessions_.empty());
   Write(TransportAction::kKill, 0, StringView());
   int err = uv_thread_join(&thread_);
   CHECK_EQ(err, 0);
@@ -237,12 +212,11 @@ bool InspectorIo::IsStarted() {
 void InspectorIo::WaitForDisconnect() {
   if (state_ == State::kAccepting)
     state_ = State::kDone;
-  if (state_ == State::kConnected) {
+  if (!sessions_.empty()) {
     state_ = State::kShutDown;
     Write(TransportAction::kStop, 0, StringView());
     fprintf(stderr, "Waiting for the debugger to disconnect...\n");
     fflush(stderr);
-    parent_env_->inspector_agent()->RunMessageLoop();
   }
 }
 
@@ -274,7 +248,8 @@ void InspectorIo::IoThreadAsyncCb(uv_async_t* async) {
       break;
     case TransportAction::kSendMessage:
       transport->Send(session_id,
-                      StringViewToUtf8(std::get<2>(outgoing)->string()));
+                      protocol::StringUtil::StringViewToUtf8(
+                          std::get<2>(outgoing)->string()));
       break;
     case TransportAction::kAcceptSession:
       transport->AcceptSession(session_id);
@@ -286,7 +261,7 @@ void InspectorIo::IoThreadAsyncCb(uv_async_t* async) {
   }
 }
 
-template<typename Transport>
+template <typename Transport>
 void InspectorIo::ThreadMain() {
   uv_loop_t loop;
   loop.data = nullptr;
@@ -348,45 +323,23 @@ void InspectorIo::PostIncomingMessage(InspectorAction action, int session_id,
     isolate->RequestInterrupt(InterruptCallback, agent);
     CHECK_EQ(0, uv_async_send(&main_thread_req_->first));
   }
-  NotifyMessageReceived();
+  Mutex::ScopedLock scoped_lock(state_lock_);
+  incoming_message_cond_.Broadcast(scoped_lock);
 }
 
 std::vector<std::string> InspectorIo::GetTargetIds() const {
   return delegate_ ? delegate_->GetTargetIds() : std::vector<std::string>();
 }
 
-void InspectorIo::WaitForFrontendMessageWhilePaused() {
-  dispatching_messages_ = false;
-  Mutex::ScopedLock scoped_lock(state_lock_);
-  if (incoming_message_queue_.empty())
-    incoming_message_cond_.Wait(scoped_lock);
-}
-
-void InspectorIo::NotifyMessageReceived() {
-  Mutex::ScopedLock scoped_lock(state_lock_);
-  incoming_message_cond_.Broadcast(scoped_lock);
-}
-
 TransportAction InspectorIo::Attach(int session_id) {
   Agent* agent = parent_env_->inspector_agent();
-  if (agent->delegate() != nullptr)
-    return TransportAction::kDeclineSession;
-
-  CHECK_EQ(session_delegate_, nullptr);
-  session_id_ = session_id;
-  state_ = State::kConnected;
   fprintf(stderr, "Debugger attached.\n");
-  session_delegate_ = std::unique_ptr<InspectorSessionDelegate>(
-      new IoSessionDelegate(this));
-  agent->Connect(session_delegate_.get());
+  sessions_[session_id] = agent->Connect(std::unique_ptr<IoSessionDelegate>(
+      new IoSessionDelegate(this, session_id)));
   return TransportAction::kAcceptSession;
 }
 
 void InspectorIo::DispatchMessages() {
-  // This function can be reentered if there was an incoming message while
-  // V8 was processing another inspector request (e.g. if the user is
-  // evaluating a long-running JS code snippet). This can happen only at
-  // specific points (e.g. the lines that call inspector_ methods)
   if (dispatching_messages_)
     return;
   dispatching_messages_ = true;
@@ -409,17 +362,20 @@ void InspectorIo::DispatchMessages() {
         Attach(id);
         break;
       case InspectorAction::kEndSession:
-        CHECK_NE(session_delegate_, nullptr);
+        sessions_.erase(id);
+        if (!sessions_.empty())
+          continue;
         if (state_ == State::kShutDown) {
           state_ = State::kDone;
         } else {
           state_ = State::kAccepting;
         }
-        parent_env_->inspector_agent()->Disconnect();
-        session_delegate_.reset();
         break;
       case InspectorAction::kSendMessage:
-        parent_env_->inspector_agent()->Dispatch(message);
+        auto session = sessions_.find(id);
+        if (session != sessions_.end() && session->second) {
+          session->second->Dispatch(message);
+        }
         break;
       }
     }
@@ -443,6 +399,20 @@ void InspectorIo::Write(TransportAction action, int session_id,
                 StringBuffer::create(inspector_message));
   int err = uv_async_send(&thread_req_);
   CHECK_EQ(0, err);
+}
+
+bool InspectorIo::WaitForFrontendEvent() {
+  // We allow DispatchMessages reentry as we enter the pause. This is important
+  // to support debugging the code invoked by an inspector call, such
+  // as Runtime.evaluate
+  dispatching_messages_ = false;
+  Mutex::ScopedLock scoped_lock(state_lock_);
+  if (sessions_.empty())
+    return false;
+  if (dispatching_message_queue_.empty() && incoming_message_queue_.empty()) {
+    incoming_message_cond_.Wait(scoped_lock);
+  }
+  return true;
 }
 
 InspectorIoDelegate::InspectorIoDelegate(InspectorIo* io,
@@ -502,14 +472,9 @@ std::string InspectorIoDelegate::GetTargetUrl(const std::string& id) {
   return "file://" + script_path_;
 }
 
-bool IoSessionDelegate::WaitForFrontendMessageWhilePaused() {
-  io_->WaitForFrontendMessageWhilePaused();
-  return true;
-}
-
 void IoSessionDelegate::SendMessageToFrontend(
     const v8_inspector::StringView& message) {
-  io_->Write(TransportAction::kSendMessage, io_->session_id_, message);
+  io_->Write(TransportAction::kSendMessage, id_, message);
 }
 
 }  // namespace inspector

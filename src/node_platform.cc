@@ -16,8 +16,10 @@ using v8::Platform;
 using v8::Task;
 using v8::TracingController;
 
-static void BackgroundRunner(void* data) {
-  TaskQueue<Task>* background_tasks = static_cast<TaskQueue<Task>*>(data);
+static void BackgroundRunner(void *data) {
+  TRACE_EVENT_METADATA1("__metadata", "thread_name", "name",
+                        "BackgroundTaskRunner");
+  TaskQueue<Task> *background_tasks = static_cast<TaskQueue<Task> *>(data);
   while (std::unique_ptr<Task> task = background_tasks->BlockingPop()) {
     task->Run();
     background_tasks->NotifyOfCompletion();
@@ -95,7 +97,7 @@ void PerIsolatePlatformData::PostDelayedTask(
 }
 
 PerIsolatePlatformData::~PerIsolatePlatformData() {
-  FlushForegroundTasksInternal();
+  while (FlushForegroundTasksInternal()) {}
   CancelPendingDelayedTasks();
 
   uv_close(reinterpret_cast<uv_handle_t*>(flush_tasks_),
@@ -223,7 +225,13 @@ bool PerIsolatePlatformData::FlushForegroundTasksInternal() {
       });
     });
   }
-  while (std::unique_ptr<Task> task = foreground_tasks_.Pop()) {
+  // Move all foreground tasks into a separate queue and flush that queue.
+  // This way tasks that are posted while flushing the queue will be run on the
+  // next call of FlushForegroundTasksInternal.
+  std::queue<std::unique_ptr<Task>> tasks = foreground_tasks_.PopAll();
+  while (!tasks.empty()) {
+    std::unique_ptr<Task> task = std::move(tasks.front());
+    tasks.pop();
     did_work = true;
     RunForegroundTask(std::move(task));
   }
@@ -254,8 +262,8 @@ void NodePlatform::CallDelayedOnForegroundThread(Isolate* isolate,
     std::unique_ptr<Task>(task), delay_in_seconds);
 }
 
-void NodePlatform::FlushForegroundTasks(v8::Isolate* isolate) {
-  ForIsolate(isolate)->FlushForegroundTasksInternal();
+bool NodePlatform::FlushForegroundTasks(v8::Isolate* isolate) {
+  return ForIsolate(isolate)->FlushForegroundTasksInternal();
 }
 
 void NodePlatform::CancelPendingDelayedTasks(v8::Isolate* isolate) {
@@ -346,6 +354,14 @@ void TaskQueue<T>::Stop() {
   Mutex::ScopedLock scoped_lock(lock_);
   stopped_ = true;
   tasks_available_.Broadcast(scoped_lock);
+}
+
+template <class T>
+std::queue<std::unique_ptr<T>> TaskQueue<T>::PopAll() {
+  Mutex::ScopedLock scoped_lock(lock_);
+  std::queue<std::unique_ptr<T>> result;
+  result.swap(task_queue_);
+  return result;
 }
 
 }  // namespace node

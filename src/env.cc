@@ -3,6 +3,7 @@
 #include "node_buffer.h"
 #include "node_platform.h"
 #include "node_file.h"
+#include "tracing/agent.h"
 
 #include <stdio.h>
 #include <algorithm>
@@ -27,44 +28,46 @@ IsolateData::IsolateData(Isolate* isolate,
                          uv_loop_t* event_loop,
                          MultiIsolatePlatform* platform,
                          uint32_t* zero_fill_field) :
-
-// Create string and private symbol properties as internalized one byte strings.
-//
-// Internalized because it makes property lookups a little faster and because
-// the string is created in the old space straight away.  It's going to end up
-// in the old space sooner or later anyway but now it doesn't go through
-// v8::Eternal's new space handling first.
-//
-// One byte because our strings are ASCII and we can safely skip V8's UTF-8
-// decoding step.  It's a one-time cost, but why pay it when you don't have to?
-#define V(PropertyName, StringValue)                                          \
-    PropertyName ## _(                                                        \
-        isolate,                                                              \
-        Private::New(                                                         \
-            isolate,                                                          \
-            String::NewFromOneByte(                                           \
-                isolate,                                                      \
-                reinterpret_cast<const uint8_t*>(StringValue),                \
-                v8::NewStringType::kInternalized,                             \
-                sizeof(StringValue) - 1).ToLocalChecked())),
-  PER_ISOLATE_PRIVATE_SYMBOL_PROPERTIES(V)
-#undef V
-#define V(PropertyName, StringValue)                                          \
-    PropertyName ## _(                                                        \
-        isolate,                                                              \
-        String::NewFromOneByte(                                               \
-            isolate,                                                          \
-            reinterpret_cast<const uint8_t*>(StringValue),                    \
-            v8::NewStringType::kInternalized,                                 \
-            sizeof(StringValue) - 1).ToLocalChecked()),
-    PER_ISOLATE_STRING_PROPERTIES(V)
-#undef V
     isolate_(isolate),
     event_loop_(event_loop),
     zero_fill_field_(zero_fill_field),
     platform_(platform) {
   if (platform_ != nullptr)
     platform_->RegisterIsolate(this, event_loop);
+
+  // Create string and private symbol properties as internalized one byte
+  // strings after the platform is properly initialized.
+  //
+  // Internalized because it makes property lookups a little faster and
+  // because the string is created in the old space straight away.  It's going
+  // to end up in the old space sooner or later anyway but now it doesn't go
+  // through v8::Eternal's new space handling first.
+  //
+  // One byte because our strings are ASCII and we can safely skip V8's UTF-8
+  // decoding step.
+
+#define V(PropertyName, StringValue)                                        \
+    PropertyName ## _.Set(                                                  \
+        isolate,                                                            \
+        Private::New(                                                       \
+            isolate,                                                        \
+            String::NewFromOneByte(                                         \
+                isolate,                                                    \
+                reinterpret_cast<const uint8_t*>(StringValue),              \
+                v8::NewStringType::kInternalized,                           \
+                sizeof(StringValue) - 1).ToLocalChecked()));
+  PER_ISOLATE_PRIVATE_SYMBOL_PROPERTIES(V)
+#undef V
+#define V(PropertyName, StringValue)                                        \
+    PropertyName ## _.Set(                                                  \
+        isolate,                                                            \
+        String::NewFromOneByte(                                             \
+            isolate,                                                        \
+            reinterpret_cast<const uint8_t*>(StringValue),                  \
+            v8::NewStringType::kInternalized,                               \
+            sizeof(StringValue) - 1).ToLocalChecked());
+  PER_ISOLATE_STRING_PROPERTIES(V)
+#undef V
 }
 
 IsolateData::~IsolateData() {
@@ -87,9 +90,11 @@ void InitThreadLocalOnce() {
 }
 
 Environment::Environment(IsolateData* isolate_data,
-                         Local<Context> context)
+                         Local<Context> context,
+                         tracing::Agent* tracing_agent)
     : isolate_(context->GetIsolate()),
       isolate_data_(isolate_data),
+      tracing_agent_(tracing_agent),
       immediate_info_(context->GetIsolate()),
       tick_info_(context->GetIsolate()),
       timer_base_(uv_now(isolate_data->event_loop())),
@@ -102,9 +107,8 @@ Environment::Environment(IsolateData* isolate_data,
 #if HAVE_INSPECTOR
       inspector_agent_(new inspector::Agent(this)),
 #endif
-      handle_cleanup_waiting_(0),
       http_parser_buffer_(nullptr),
-      fs_stats_field_array_(isolate_, kFsStatsFieldsLength),
+      fs_stats_field_array_(isolate_, kFsStatsFieldsLength * 2),
       context_(context->GetIsolate(), context) {
   // We'll be creating new objects so make sure we've entered the context.
   v8::HandleScope handle_scope(isolate());
@@ -129,6 +133,10 @@ Environment::Environment(IsolateData* isolate_data,
 }
 
 Environment::~Environment() {
+  // Make sure there are no re-used libuv wrapper objects.
+  // CleanupHandles() should have removed all of them.
+  CHECK(file_handle_read_wrap_freelist_.empty());
+
   v8::HandleScope handle_scope(isolate());
 
 #if HAVE_INSPECTOR
@@ -204,9 +212,7 @@ void Environment::RegisterHandleCleanups() {
                                         void* arg) {
     handle->data = env;
 
-    uv_close(handle, [](uv_handle_t* handle) {
-      static_cast<Environment*>(handle->data)->FinishHandleCleanup(handle);
-    });
+    env->CloseHandle(handle, [](uv_handle_t* handle) {});
   };
 
   RegisterHandleCleanup(
@@ -228,14 +234,23 @@ void Environment::RegisterHandleCleanups() {
 }
 
 void Environment::CleanupHandles() {
-  for (HandleCleanup& hc : handle_cleanup_queue_) {
-    handle_cleanup_waiting_++;
+  for (ReqWrap<uv_req_t>* request : req_wrap_queue_)
+    request->Cancel();
+
+  for (HandleWrap* handle : handle_wrap_queue_)
+    handle->Close();
+
+  for (HandleCleanup& hc : handle_cleanup_queue_)
     hc.cb_(this, hc.handle_, hc.arg_);
-  }
   handle_cleanup_queue_.clear();
 
-  while (handle_cleanup_waiting_ != 0)
+  while (handle_cleanup_waiting_ != 0 ||
+         request_waiting_ != 0 ||
+         !handle_wrap_queue_.IsEmpty()) {
     uv_run(event_loop(), UV_RUN_ONCE);
+  }
+
+  file_handle_read_wrap_freelist_.clear();
 }
 
 void Environment::StartProfilerIdleNotifier() {
@@ -298,6 +313,37 @@ void Environment::PrintSyncTrace() const {
     }
   }
   fflush(stderr);
+}
+
+void Environment::RunCleanup() {
+  CleanupHandles();
+
+  while (!cleanup_hooks_.empty()) {
+    // Copy into a vector, since we can't sort an unordered_set in-place.
+    std::vector<CleanupHookCallback> callbacks(
+        cleanup_hooks_.begin(), cleanup_hooks_.end());
+    // We can't erase the copied elements from `cleanup_hooks_` yet, because we
+    // need to be able to check whether they were un-scheduled by another hook.
+
+    std::sort(callbacks.begin(), callbacks.end(),
+              [](const CleanupHookCallback& a, const CleanupHookCallback& b) {
+      // Sort in descending order so that the most recently inserted callbacks
+      // are run first.
+      return a.insertion_order_counter_ > b.insertion_order_counter_;
+    });
+
+    for (const CleanupHookCallback& cb : callbacks) {
+      if (cleanup_hooks_.count(cb) == 0) {
+        // This hook was removed from the `cleanup_hooks_` set during another
+        // hook that was run earlier. Nothing to do here.
+        continue;
+      }
+
+      cb.fn_(cb.arg_);
+      cleanup_hooks_.erase(cb);
+    }
+    CleanupHandles();
+  }
 }
 
 void Environment::RunBeforeExitCallbacks() {

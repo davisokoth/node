@@ -29,8 +29,10 @@ v8::MaybeLocal<v8::Array> collectionsEntries(v8::Local<v8::Context> context,
   v8::Isolate* isolate = context->GetIsolate();
   v8::Local<v8::Array> entries;
   bool isKeyValue = false;
-  if (!v8::debug::EntriesPreview(isolate, value, &isKeyValue).ToLocal(&entries))
+  if (!value->IsObject() ||
+      !value.As<v8::Object>()->PreviewEntries(&isKeyValue).ToLocal(&entries)) {
     return v8::MaybeLocal<v8::Array>();
+  }
 
   v8::Local<v8::Array> wrappedEntries = v8::Array::New(isolate);
   CHECK(!isKeyValue || wrappedEntries->Length() % 2 == 0);
@@ -494,7 +496,6 @@ void V8Debugger::ScriptCompiled(v8::Local<v8::debug::Script> script,
 
 void V8Debugger::BreakProgramRequested(
     v8::Local<v8::Context> pausedContext, v8::Local<v8::Object>,
-    v8::Local<v8::Value>,
     const std::vector<v8::debug::BreakpointId>& break_points_hit) {
   handleProgramBreak(pausedContext, v8::Local<v8::Value>(), break_points_hit);
 }

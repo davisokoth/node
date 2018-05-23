@@ -20,6 +20,7 @@
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "node_stat_watcher.h"
+#include "node_internals.h"
 #include "async_wrap-inl.h"
 #include "env-inl.h"
 #include "util-inl.h"
@@ -74,16 +75,10 @@ void StatWatcher::Initialize(Environment* env, Local<Object> target) {
 }
 
 
-static void Delete(uv_handle_t* handle) {
-  delete reinterpret_cast<uv_fs_poll_t*>(handle);
-}
-
-
 StatWatcher::StatWatcher(Environment* env, Local<Object> wrap)
     : AsyncWrap(env, wrap, AsyncWrap::PROVIDER_STATWATCHER),
       watcher_(new uv_fs_poll_t) {
-  MakeWeak<StatWatcher>(this);
-  Wrap(wrap, this);
+  MakeWeak();
   uv_fs_poll_init(env->event_loop(), watcher_);
   watcher_->data = static_cast<void*>(this);
 }
@@ -93,7 +88,7 @@ StatWatcher::~StatWatcher() {
   if (IsActive()) {
     Stop();
   }
-  uv_close(reinterpret_cast<uv_handle_t*>(watcher_), Delete);
+  env()->CloseHandle(watcher_, [](uv_fs_poll_t* handle) { delete handle; });
 }
 
 
@@ -107,10 +102,14 @@ void StatWatcher::Callback(uv_fs_poll_t* handle,
   HandleScope handle_scope(env->isolate());
   Context::Scope context_scope(env->context());
 
-  FillStatsArray(env->fs_stats_field_array(), curr);
-  FillStatsArray(env->fs_stats_field_array(), prev, 14);
-  Local<Value> arg = Integer::New(env->isolate(), status);
-  wrap->MakeCallback(env->onchange_string(), 1, &arg);
+  Local<Value> arr = node::FillGlobalStatsArray(env, curr);
+  node::FillGlobalStatsArray(env, prev, env->kFsStatsFieldsLength);
+
+  Local<Value> argv[2] {
+    Integer::New(env->isolate(), status),
+    arr
+  };
+  wrap->MakeCallback(env->onchange_string(), arraysize(argv), argv);
 }
 
 
@@ -186,7 +185,7 @@ void StatWatcher::Stop(const FunctionCallbackInfo<Value>& args) {
 
 void StatWatcher::Stop() {
   uv_fs_poll_stop(watcher_);
-  MakeWeak<StatWatcher>(this);
+  MakeWeak();
 }
 
 

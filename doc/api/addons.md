@@ -1,6 +1,7 @@
 # C++ Addons
 
 <!--introduced_in=v0.10.0-->
+<!-- type=misc -->
 
 Node.js Addons are dynamically-linked shared objects, written in C++, that
 can be loaded into Node.js using the [`require()`][require] function, and used
@@ -8,7 +9,7 @@ just as if they were an ordinary Node.js module. They are used primarily to
 provide an interface between JavaScript running in Node.js and C/C++ libraries.
 
 At the moment, the method for implementing Addons is rather complicated,
-involving knowledge of several components and APIs :
+involving knowledge of several components and APIs:
 
  - V8: the C++ library Node.js currently uses to provide the
    JavaScript implementation. V8 provides the mechanisms for creating objects,
@@ -92,7 +93,7 @@ There is no semi-colon after `NODE_MODULE` as it's not a function (see
 `node.h`).
 
 The `module_name` must match the filename of the final binary (excluding
-the .node suffix).
+the `.node` suffix).
 
 In the `hello.cc` example, then, the initialization function is `init` and the
 Addon module name is `addon`.
@@ -102,7 +103,7 @@ Addon module name is `addon`.
 Once the source code has been written, it must be compiled into the binary
 `addon.node` file. To do so, create a file called `binding.gyp` in the
 top-level of the project describing the build configuration of the module
-using a JSON-like format. This file is used by [node-gyp][] -- a tool written
+using a JSON-like format. This file is used by [node-gyp][] — a tool written
 specifically to compile Node.js Addons.
 
 ```json
@@ -216,10 +217,9 @@ Addon developers are recommended to use to keep compatibility between past and
 future releases of V8 and Node.js. See the `nan` [examples][] for an
 illustration of how it can be used.
 
-
 ## N-API
 
-> Stability: 1 - Experimental
+> Stability: 2 - Stable
 
 N-API is an API for building native Addons. It is independent from
 the underlying JavaScript runtime (e.g. V8) and is maintained as part of
@@ -306,7 +306,6 @@ built using `node-gyp`:
 $ node-gyp configure build
 ```
 
-
 ### Function arguments
 
 Addons will typically expose objects and functions that can be accessed from
@@ -379,7 +378,6 @@ const addon = require('./build/Release/addon');
 
 console.log('This should be eight:', addon.add(3, 5));
 ```
-
 
 ### Callbacks
 
@@ -487,7 +485,6 @@ console.log(obj1.msg, obj2.msg);
 // Prints: 'hello world'
 ```
 
-
 ### Function factory
 
 Another common scenario is creating JavaScript functions that wrap C++
@@ -544,7 +541,6 @@ const fn = addon();
 console.log(fn());
 // Prints: 'hello world'
 ```
-
 
 ### Wrapping C++ objects
 
@@ -915,7 +911,6 @@ console.log(obj2.plusOne());
 // Prints: 23
 ```
 
-
 ### Passing wrapped objects around
 
 In addition to wrapping and returning C++ objects, it is possible to pass
@@ -1090,24 +1085,26 @@ console.log(result);
 
 ### AtExit hooks
 
-An "AtExit" hook is a function that is invoked after the Node.js event loop
+An `AtExit` hook is a function that is invoked after the Node.js event loop
 has ended but before the JavaScript VM is terminated and Node.js shuts down.
-"AtExit" hooks are registered using the `node::AtExit` API.
+`AtExit` hooks are registered using the `node::AtExit` API.
 
 #### void AtExit(callback, args)
 
-* `callback` {void (\*)(void\*)} A pointer to the function to call at exit.
-* `args` {void\*} A pointer to pass to the callback at exit.
+* `callback` <span class="type">&lt;void (\*)(void\*)&gt;</span>
+  A pointer to the function to call at exit.
+* `args` <span class="type">&lt;void\*&gt;</span>
+  A pointer to pass to the callback at exit.
 
 Registers exit hooks that run after the event loop has ended but before the VM
 is killed.
 
-AtExit takes two parameters: a pointer to a callback function to run at exit,
+`AtExit` takes two parameters: a pointer to a callback function to run at exit,
 and a pointer to untyped context data to be passed to that callback.
 
 Callbacks are run in last-in first-out order.
 
-The following `addon.cc` implements AtExit:
+The following `addon.cc` implements `AtExit`:
 
 ```cpp
 // addon.cc

@@ -59,9 +59,9 @@
   * Use a capital letter after the "Note:" label.
   * Preferably, make the note a new paragraph for better visual distinction.
 * Function arguments or object properties should use the following format:
-  * <code>* \`name\` {type|type2} Optional description. \*\*Default:\*\* \`defaultValue\`</code>
-  * E.g. <code>* `byteOffset` {integer} Index of first byte to expose. **Default:** `0`</code>
-  * The `type` should refer to a Node.js type or a [JavaScript type][]
+  * <code>* \`name\` {type|type2} Optional description. \*\*Default:\*\* \`defaultValue\`.</code>
+  * E.g. <code>* `byteOffset` {integer} Index of first byte to expose. **Default:** `0`.</code>
+  * The `type` should refer to a Node.js type or a [JavaScript type][].
 * Function returns should use the following format:
   * <code>* Returns: {type|type2} Optional description.</code>
   * E.g. <code>* Returns: {AsyncHook} A reference to `asyncHook`.</code>
@@ -69,8 +69,11 @@
   * OK: JavaScript, Google's V8
   * NOT OK: Javascript, Google's v8
 
+See also API documentation structure overview in [doctools README][].
+
 [Em dashes]: https://en.wikipedia.org/wiki/Dash#Em_dash
 [Javascript type]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Grammar_and_types#Data_structures_and_types
 [serial commas]: https://en.wikipedia.org/wiki/Serial_comma
 [The New York Times Manual of Style and Usage]: https://en.wikipedia.org/wiki/The_New_York_Times_Manual_of_Style_and_Usage
 [plugin]: http://editorconfig.org/#download
+[doctools README]: ../tools/doc/README.md

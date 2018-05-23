@@ -1,6 +1,7 @@
 'use strict';
 
-const yaml = require('js-yaml');
+const yaml =
+  require(`${__dirname}/../node_modules/eslint/node_modules/js-yaml`);
 
 function isYAMLBlock(text) {
   return /^<!-- YAML/.test(text);
@@ -15,7 +16,7 @@ function extractAndParseYAML(text) {
              .replace(/^<!-- YAML/, '')
              .replace(/-->$/, '');
 
-  // js-yaml.safeLoad() throws on error
+  // js-yaml.safeLoad() throws on error.
   const meta = yaml.safeLoad(text);
 
   if (meta.added) {

@@ -16,7 +16,6 @@ namespace http2 {
 
 using v8::Array;
 using v8::Context;
-using v8::EscapableHandleScope;
 using v8::Isolate;
 using v8::MaybeLocal;
 
@@ -434,7 +433,8 @@ enum session_state_flags {
   SESSION_STATE_HAS_SCOPE = 0x1,
   SESSION_STATE_WRITE_SCHEDULED = 0x2,
   SESSION_STATE_CLOSED = 0x4,
-  SESSION_STATE_SENDING = 0x8,
+  SESSION_STATE_CLOSING = 0x8,
+  SESSION_STATE_SENDING = 0x10,
 };
 
 // This allows for 4 default-sized frames with their frame headers
@@ -581,11 +581,17 @@ class Http2Stream : public AsyncWrap,
   // Submit informational headers for this stream
   int SubmitInfo(nghttp2_nv* nva, size_t len);
 
+  // Submit trailing headers for this stream
+  int SubmitTrailers(nghttp2_nv* nva, size_t len);
+  void OnTrailers();
+
   // Submit a PRIORITY frame for this stream
   int SubmitPriority(nghttp2_priority_spec* prispec, bool silent = false);
 
   // Submits an RST_STREAM frame using the given code
   void SubmitRstStream(const uint32_t code);
+
+  void FlushRstStream();
 
   // Submits a PUSH_PROMISE frame with this stream as the parent.
   Http2Stream* SubmitPushPromise(
@@ -614,7 +620,7 @@ class Http2Stream : public AsyncWrap,
 
   inline bool IsClosed() const {
     return flags_ & NGHTTP2_STREAM_FLAG_CLOSED;
-    }
+  }
 
   inline bool HasTrailers() const {
     return flags_ & NGHTTP2_STREAM_FLAG_TRAILERS;
@@ -670,25 +676,6 @@ class Http2Stream : public AsyncWrap,
 
   size_t self_size() const override { return sizeof(*this); }
 
-  // Handling Trailer Headers
-  class SubmitTrailers {
-   public:
-    void Submit(nghttp2_nv* trailers, size_t length) const;
-
-    SubmitTrailers(Http2Session* sesion,
-                   Http2Stream* stream,
-                   uint32_t* flags);
-
-   private:
-    Http2Session* const session_;
-    Http2Stream* const stream_;
-    uint32_t* const flags_;
-
-    friend class Http2Stream;
-  };
-
-  void OnTrailers(const SubmitTrailers& submit_trailers);
-
   // JavaScript API
   static void GetID(const FunctionCallbackInfo<Value>& args);
   static void Destroy(const FunctionCallbackInfo<Value>& args);
@@ -697,6 +684,7 @@ class Http2Stream : public AsyncWrap,
   static void PushPromise(const FunctionCallbackInfo<Value>& args);
   static void RefreshState(const FunctionCallbackInfo<Value>& args);
   static void Info(const FunctionCallbackInfo<Value>& args);
+  static void Trailers(const FunctionCallbackInfo<Value>& args);
   static void Respond(const FunctionCallbackInfo<Value>& args);
   static void RstStream(const FunctionCallbackInfo<Value>& args);
 
@@ -811,7 +799,7 @@ class Http2Session : public AsyncWrap, public StreamListener {
 
   bool Ping(v8::Local<v8::Function> function);
 
-  void SendPendingData();
+  uint8_t SendPendingData();
 
   // Submits a new request. If the request is a success, assigned
   // will be a pointer to the Http2Stream instance assigned.
@@ -840,6 +828,9 @@ class Http2Session : public AsyncWrap, public StreamListener {
   // Schedule a write if nghttp2 indicates it wants to write to the socket.
   void MaybeScheduleWrite();
 
+  // Stop reading if nghttp2 doesn't want to anymore.
+  void MaybeStopReading();
+
   // Returns pointer to the stream, or nullptr if stream does not exist
   inline Http2Stream* FindStream(int32_t id);
 
@@ -859,7 +850,10 @@ class Http2Session : public AsyncWrap, public StreamListener {
 
   size_t self_size() const override { return sizeof(*this); }
 
-  void GetTrailers(Http2Stream* stream, uint32_t* flags);
+  // Schedule an RstStream for after the current write finishes.
+  inline void AddPendingRstStream(int32_t stream_id) {
+    pending_rst_streams_.emplace_back(stream_id);
+  }
 
   // Handle reads/writes from the underlying network transport.
   void OnStreamRead(ssize_t nread, const uv_buf_t& buf) override;
@@ -1065,6 +1059,7 @@ class Http2Session : public AsyncWrap, public StreamListener {
 
   std::vector<nghttp2_stream_write> outgoing_buffers_;
   std::vector<uint8_t> outgoing_storage_;
+  std::vector<int32_t> pending_rst_streams_;
 
   void CopyDataIntoOutgoing(const uint8_t* src, size_t src_length);
   void ClearOutgoing(int status);
@@ -1157,7 +1152,6 @@ class Http2StreamPerformanceEntry : public PerformanceEntry {
 class Http2Session::Http2Ping : public AsyncWrap {
  public:
   explicit Http2Ping(Http2Session* session);
-  ~Http2Ping();
 
   size_t self_size() const override { return sizeof(*this); }
 
@@ -1178,7 +1172,6 @@ class Http2Session::Http2Settings : public AsyncWrap {
  public:
   explicit Http2Settings(Environment* env);
   explicit Http2Settings(Http2Session* session);
-  ~Http2Settings();
 
   size_t self_size() const override { return sizeof(*this); }
 
@@ -1233,7 +1226,7 @@ class ExternalHeader :
                                   vec.len);
   }
 
-  template<bool may_internalize>
+  template <bool may_internalize>
   static MaybeLocal<String> New(Environment* env, nghttp2_rcbuf* buf) {
     if (nghttp2_rcbuf_is_static(buf)) {
       auto& static_str_map = env->isolate_data()->http2_static_strs;

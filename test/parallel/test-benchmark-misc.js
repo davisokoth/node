@@ -6,8 +6,8 @@ const runBenchmark = require('../common/benchmark');
 
 runBenchmark('misc', [
   'concat=0',
+  'dur=0.1',
   'method=',
-  'millions=.000001',
   'n=1',
   'type=extend',
   'val=magyarország.icom.museum'

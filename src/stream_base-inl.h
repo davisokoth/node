@@ -70,7 +70,7 @@ inline StreamResource::~StreamResource() {
     StreamListener* listener = listener_;
     listener->OnStreamDestroy();
     // Remove the listener if it didn’t remove itself. This makes the logic
-    // logic in `OnStreamDestroy()` implementations easier, because they
+    // in `OnStreamDestroy()` implementations easier, because they
     // may call generic cleanup functions which can just remove the
     // listener unconditionally.
     if (listener == listener_)
@@ -193,10 +193,16 @@ inline StreamWriteResult StreamBase::Write(
     v8::Local<v8::Object> req_wrap_obj) {
   Environment* env = stream_env();
   int err;
+
+  size_t total_bytes = 0;
+  for (size_t i = 0; i < count; ++i)
+    total_bytes += bufs[i].len;
+  bytes_written_ += total_bytes;
+
   if (send_handle == nullptr) {
     err = DoTryWrite(&bufs, &count);
     if (err != 0 || count == 0) {
-      return StreamWriteResult { false, err, nullptr };
+      return StreamWriteResult { false, err, nullptr, total_bytes };
     }
   }
 
@@ -226,7 +232,7 @@ inline StreamWriteResult StreamBase::Write(
     ClearError();
   }
 
-  return StreamWriteResult { async, err, req_wrap };
+  return StreamWriteResult { async, err, req_wrap, total_bytes };
 }
 
 template <typename OtherBase>
@@ -237,12 +243,6 @@ SimpleShutdownWrap<OtherBase>::SimpleShutdownWrap(
     OtherBase(stream->stream_env(),
               req_wrap_obj,
               AsyncWrap::PROVIDER_SHUTDOWNWRAP) {
-  Wrap(req_wrap_obj, static_cast<AsyncWrap*>(this));
-}
-
-template <typename OtherBase>
-SimpleShutdownWrap<OtherBase>::~SimpleShutdownWrap() {
-  ClearWrap(static_cast<AsyncWrap*>(this)->object());
 }
 
 inline ShutdownWrap* StreamBase::CreateShutdownWrap(
@@ -258,12 +258,6 @@ SimpleWriteWrap<OtherBase>::SimpleWriteWrap(
     OtherBase(stream->stream_env(),
               req_wrap_obj,
               AsyncWrap::PROVIDER_WRITEWRAP) {
-  Wrap(req_wrap_obj, static_cast<AsyncWrap*>(this));
-}
-
-template <typename OtherBase>
-SimpleWriteWrap<OtherBase>::~SimpleWriteWrap() {
-  ClearWrap(static_cast<AsyncWrap*>(this)->object());
 }
 
 inline WriteWrap* StreamBase::CreateWriteWrap(
@@ -301,6 +295,12 @@ void StreamBase::AddMethods(Environment* env,
                             env->as_external(),
                             signature);
 
+  Local<FunctionTemplate> get_bytes_written_templ =
+      FunctionTemplate::New(env->isolate(),
+                            GetBytesWritten<Base>,
+                            env->as_external(),
+                            signature);
+
   t->PrototypeTemplate()->SetAccessorProperty(env->fd_string(),
                                               get_fd_templ,
                                               Local<FunctionTemplate>(),
@@ -316,10 +316,14 @@ void StreamBase::AddMethods(Environment* env,
                                               Local<FunctionTemplate>(),
                                               attributes);
 
+  t->PrototypeTemplate()->SetAccessorProperty(env->bytes_written_string(),
+                                              get_bytes_written_templ,
+                                              Local<FunctionTemplate>(),
+                                              attributes);
+
   env->SetProtoMethod(t, "readStart", JSMethod<Base, &StreamBase::ReadStartJS>);
   env->SetProtoMethod(t, "readStop", JSMethod<Base, &StreamBase::ReadStopJS>);
-  if ((flags & kFlagNoShutdown) == 0)
-    env->SetProtoMethod(t, "shutdown", JSMethod<Base, &StreamBase::Shutdown>);
+  env->SetProtoMethod(t, "shutdown", JSMethod<Base, &StreamBase::Shutdown>);
   if ((flags & kFlagHasWritev) != 0)
     env->SetProtoMethod(t, "writev", JSMethod<Base, &StreamBase::Writev>);
   env->SetProtoMethod(t,
@@ -357,7 +361,6 @@ void StreamBase::GetFD(const FunctionCallbackInfo<Value>& args) {
 
 template <class Base>
 void StreamBase::GetBytesRead(const FunctionCallbackInfo<Value>& args) {
-  // The handle instance hasn't been set. So no bytes could have been read.
   Base* handle;
   ASSIGN_OR_RETURN_UNWRAP(&handle,
                           args.This(),
@@ -366,6 +369,18 @@ void StreamBase::GetBytesRead(const FunctionCallbackInfo<Value>& args) {
   StreamBase* wrap = static_cast<StreamBase*>(handle);
   // uint64_t -> double. 53bits is enough for all real cases.
   args.GetReturnValue().Set(static_cast<double>(wrap->bytes_read_));
+}
+
+template <class Base>
+void StreamBase::GetBytesWritten(const FunctionCallbackInfo<Value>& args) {
+  Base* handle;
+  ASSIGN_OR_RETURN_UNWRAP(&handle,
+                          args.This(),
+                          args.GetReturnValue().Set(0));
+
+  StreamBase* wrap = static_cast<StreamBase*>(handle);
+  // uint64_t -> double. 53bits is enough for all real cases.
+  args.GetReturnValue().Set(static_cast<double>(wrap->bytes_written_));
 }
 
 template <class Base>
@@ -433,7 +448,7 @@ inline void StreamReq::ResetObject(v8::Local<v8::Object> obj) {
 #ifdef DEBUG
   CHECK_GT(obj->InternalFieldCount(), StreamReq::kStreamReqField);
 #endif
-  ClearWrap(obj);
+  obj->SetAlignedPointerInInternalField(0, nullptr);  // BaseObject field.
   obj->SetAlignedPointerInInternalField(StreamReq::kStreamReqField, nullptr);
 }
 

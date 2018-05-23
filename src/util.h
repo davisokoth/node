@@ -35,7 +35,6 @@
 #include <string.h>
 
 #include <functional>  // std::function
-#include <type_traits>  // std::remove_reference
 
 namespace node {
 
@@ -83,8 +82,6 @@ void LowMemoryNotification();
 NO_RETURN void Abort();
 NO_RETURN void Assert(const char* const (*args)[4]);
 void DumpBacktrace(FILE* fp);
-
-template <typename T> using remove_reference = std::remove_reference<T>;
 
 #define FIXED_ONE_BYTE_STRING(isolate, string)                                \
   (node::OneByteString((isolate), (string), sizeof(string) - 1))
@@ -134,14 +131,6 @@ template <typename T> using remove_reference = std::remove_reference<T>;
 #define CHECK_NE(a, b) CHECK((a) != (b))
 
 #define UNREACHABLE() ABORT()
-
-#define ASSIGN_OR_RETURN_UNWRAP(ptr, obj, ...)                                \
-  do {                                                                        \
-    *ptr =                                                                    \
-        Unwrap<typename node::remove_reference<decltype(**ptr)>::type>(obj);  \
-    if (*ptr == nullptr)                                                      \
-      return __VA_ARGS__;                                                     \
-  } while (0)
 
 // TAILQ-style intrusive list node.
 template <typename T>
@@ -222,7 +211,7 @@ inline v8::Local<TypeName> PersistentToLocal(
     v8::Isolate* isolate,
     const Persistent<TypeName>& persistent);
 
-// Unchecked conversion from a non-weak Persistent<T> to Local<TLocal<T>,
+// Unchecked conversion from a non-weak Persistent<T> to Local<T>,
 // use with care!
 //
 // Do not call persistent.Reset() while the returned Local<T> is still in
@@ -249,13 +238,6 @@ inline v8::Local<v8::String> OneByteString(v8::Isolate* isolate,
 inline v8::Local<v8::String> OneByteString(v8::Isolate* isolate,
                                            const unsigned char* data,
                                            int length = -1);
-
-inline void Wrap(v8::Local<v8::Object> object, void* pointer);
-
-inline void ClearWrap(v8::Local<v8::Object> object);
-
-template <typename TypeName>
-inline TypeName* Unwrap(v8::Local<v8::Object> object);
 
 // Swaps bytes in place. nbytes is the number of bytes to swap and must be a
 // multiple of the word size (checked by function).
@@ -414,12 +396,6 @@ class BufferValue : public MaybeStackBuffer<char> {
   explicit BufferValue(v8::Isolate* isolate, v8::Local<v8::Value> value);
 };
 
-#define THROW_AND_RETURN_UNLESS_BUFFER(env, obj)                            \
-  do {                                                                      \
-    if (!Buffer::HasInstance(obj))                                          \
-      return env->ThrowTypeError("argument should be a Buffer");            \
-  } while (0)
-
 #define SPREAD_BUFFER_ARG(val, name)                                          \
   CHECK((val)->IsArrayBufferView());                                          \
   v8::Local<v8::ArrayBufferView> name = (val).As<v8::ArrayBufferView>();      \
@@ -434,7 +410,6 @@ class BufferValue : public MaybeStackBuffer<char> {
 // Use this when a variable or parameter is unused in order to explicitly
 // silence a compiler warning about that.
 template <typename T> inline void USE(T&&) {}
-}  // namespace node
 
 // Run a function when exiting the current scope.
 struct OnScopeLeave {
@@ -443,6 +418,45 @@ struct OnScopeLeave {
   explicit OnScopeLeave(std::function<void()> fn) : fn_(fn) {}
   ~OnScopeLeave() { fn_(); }
 };
+
+// Simple RAII wrapper for contiguous data that uses malloc()/free().
+template <typename T>
+struct MallocedBuffer {
+  T* data;
+  size_t size;
+
+  T* release() {
+    T* ret = data;
+    data = nullptr;
+    return ret;
+  }
+
+  MallocedBuffer() : data(nullptr) {}
+  explicit MallocedBuffer(size_t size) : data(Malloc<T>(size)), size(size) {}
+  MallocedBuffer(MallocedBuffer&& other) : data(other.data), size(other.size) {
+    other.data = nullptr;
+  }
+  MallocedBuffer& operator=(MallocedBuffer&& other) {
+    this->~MallocedBuffer();
+    return *new(this) MallocedBuffer(other);
+  }
+  ~MallocedBuffer() {
+    free(data);
+  }
+  MallocedBuffer(const MallocedBuffer&) = delete;
+  MallocedBuffer& operator=(const MallocedBuffer&) = delete;
+};
+
+// Test whether some value can be called with ().
+template <typename T, typename = void>
+struct is_callable : std::is_function<T> { };
+
+template <typename T>
+struct is_callable<T, typename std::enable_if<
+    std::is_same<decltype(void(&T::operator())), void>::value
+    >::type> : std::true_type { };
+
+}  // namespace node
 
 #endif  // defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
 

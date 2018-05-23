@@ -154,8 +154,9 @@ class InspectorSession {
     return this._terminationPromise;
   }
 
-  disconnect() {
+  async disconnect() {
     this._socket.destroy();
+    return this.waitForServerDisconnect();
   }
 
   _onMessage(message) {
@@ -365,10 +366,11 @@ class NodeInstance {
     }
   }
 
-  httpGet(host, path) {
+  httpGet(host, path, hostHeaderValue) {
     console.log('[test]', `Testing ${path}`);
+    const headers = hostHeaderValue ? { 'Host': hostHeaderValue } : null;
     return this.portPromise.then((port) => new Promise((resolve, reject) => {
-      const req = http.get({ host, port, path }, (res) => {
+      const req = http.get({ host, port, path, headers }, (res) => {
         let response = '';
         res.setEncoding('utf8');
         res
@@ -443,6 +445,7 @@ class NodeInstance {
 
   kill() {
     this._process.kill();
+    return this.expectShutdown();
   }
 
   scriptPath() {

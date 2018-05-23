@@ -3,6 +3,7 @@
 #include "async_wrap.h"
 #include "env-inl.h"
 #include "node_buffer.h"
+#include "node_internals.h"
 #include "stream_base-inl.h"
 #include "v8.h"
 
@@ -23,12 +24,7 @@ using v8::Value;
 JSStream::JSStream(Environment* env, Local<Object> obj)
     : AsyncWrap(env, obj, AsyncWrap::PROVIDER_JSSTREAM),
       StreamBase(env) {
-  node::Wrap(obj, this);
-  MakeWeak<JSStream>(this);
-}
-
-
-JSStream::~JSStream() {
+  MakeWeak();
 }
 
 

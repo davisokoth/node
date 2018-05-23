@@ -1,6 +1,7 @@
 # Deprecated APIs
 
 <!--introduced_in=v7.7.0-->
+<!-- type=misc -->
 
 Node.js may deprecate APIs when either: (a) use of the API is considered to be
 unsafe, (b) an improved alternative API has been made available, or (c)
@@ -29,12 +30,11 @@ cause an error to be thrown.
 An End-of-Life deprecation is used to identify code that either has been
 removed or will soon be removed from Node.js.
 
-## Un-deprecation
+## Revoking deprecations
 
-From time-to-time the deprecation of an API may be reversed. Such action may
-happen in either a semver-minor or semver-major release. In such situations,
+Occasionally, the deprecation of an API may be reversed. In such situations,
 this document will be updated with information relevant to the decision.
-*However, the deprecation identifier will not be modified*.
+However, the deprecation identifier will not be modified.
 
 ## List of Deprecated APIs
 
@@ -72,7 +72,7 @@ be used.
 <a id="DEP0005"></a>
 ### DEP0005: Buffer() constructor
 
-Type: Documentation-only (supports [`--pending-deprecation`][])
+Type: Runtime (supports [`--pending-deprecation`][])
 
 The `Buffer()` function and `new Buffer()` constructor are deprecated due to
 API usability issues that can potentially lead to accidental security issues.
@@ -92,6 +92,10 @@ is strongly recommended:
 * [`Buffer.from(buffer)`][] - Create a `Buffer` that copies `buffer`.
 * [`Buffer.from(string[, encoding])`][from_string_encoding] - Create a `Buffer`
   that copies `string`.
+
+As of v10.0.0, a deprecation warning is printed at runtime when
+`--pending-deprecation` is used or when the calling code is
+outside `node_modules` in order to better target developers, rather than users.
 
 <a id="DEP0006"></a>
 ### DEP0006: child\_process options.customFds
@@ -127,7 +131,7 @@ to the `constants` property exposed by the relevant module. For instance,
 <a id="DEP0009"></a>
 ### DEP0009: crypto.pbkdf2 without digest
 
-Type: End-of-life
+Type: End-of-Life
 
 Use of the [`crypto.pbkdf2()`][] API without specifying a digest was deprecated
 in Node.js 6.0 because the method defaulted to using the non-recommended
@@ -156,7 +160,7 @@ instead.
 
 Type: End-of-Life
 
-`Domain.dispose()` is removed. Recover from failed I/O actions
+`Domain.dispose()` has been removed. Recover from failed I/O actions
 explicitly via error event handlers set on the domain instead.
 
 <a id="DEP0013"></a>
@@ -165,23 +169,23 @@ explicitly via error event handlers set on the domain instead.
 Type: End-of-Life
 
 Calling an asynchronous function without a callback throws a `TypeError`
-REPLACEME onwards. Refer: [PR 12562](https://github.com/nodejs/node/pull/12562)
+in Node.js 10.0.0 onwards. (See https://github.com/nodejs/node/pull/12562.)
 
 <a id="DEP0014"></a>
 ### DEP0014: fs.read legacy String interface
 
 Type: End-of-Life
 
-The [`fs.read()`][] legacy String interface is deprecated. Use the Buffer API as
-mentioned in the documentation instead.
+The [`fs.read()`][] legacy `String` interface is deprecated. Use the `Buffer`
+API as mentioned in the documentation instead.
 
 <a id="DEP0015"></a>
 ### DEP0015: fs.readSync legacy String interface
 
 Type: End-of-Life
 
-The [`fs.readSync()`][] legacy String interface is deprecated. Use the Buffer
-API as mentioned in the documentation instead.
+The [`fs.readSync()`][] legacy `String` interface is deprecated. Use the
+`Buffer` API as mentioned in the documentation instead.
 
 <a id="DEP0016"></a>
 ### DEP0016: GLOBAL/root
@@ -379,7 +383,7 @@ instead.
 <a id="DEP0041"></a>
 ### DEP0041: NODE\_REPL\_HISTORY\_FILE environment variable
 
-Type: End-of-life
+Type: End-of-Life
 
 The `NODE_REPL_HISTORY_FILE` environment variable was removed. Please use
 `NODE_REPL_HISTORY` instead.
@@ -524,10 +528,11 @@ The [`util._extend()`][] API has been deprecated.
 <a id="DEP0061"></a>
 ### DEP0061: fs.SyncWriteStream
 
-Type: Runtime
+Type: End-of-Life
 
 The `fs.SyncWriteStream` class was never intended to be a publicly accessible
-API. No alternative API is available. Please use a userland alternative.
+API and has been removed. No alternative API is available. Please use a userland
+alternative.
 
 <a id="DEP0062"></a>
 ### DEP0062: node --debug
@@ -564,7 +569,7 @@ Type: End-of-Life
 
 The `repl` module's `REPL_MODE_MAGIC` constant, used for `replMode` option, has
 been removed. Its behavior has been functionally identical to that of
-`REPL_MODE_SLOPPY` since Node.js v6.0.0, when V8 5.0 was imported. Please use
+`REPL_MODE_SLOPPY` since Node.js 6.0.0, when V8 5.0 was imported. Please use
 `REPL_MODE_SLOPPY` instead.
 
 The `NODE_REPL_MODE` environment variable is used to set the underlying
@@ -700,7 +705,7 @@ Type: Runtime
 
 `Module._debug()` has been deprecated.
 
-The `Module._debug()` function   was never documented as an officially
+The `Module._debug()` function was never documented as an officially
 supported API.
 
 <a id="DEP0078"></a>
@@ -713,11 +718,11 @@ Type: Runtime
 <a id="DEP0079"></a>
 ### DEP0079: Custom inspection function on Objects via .inspect()
 
-Type: Runtime
+Type: End-of-Life
 
 Using a property named `inspect` on an object to specify a custom inspection
 function for [`util.inspect()`][] is deprecated. Use [`util.inspect.custom`][]
-instead. For backwards compatibility with Node.js prior to version 6.4.0, both
+instead. For backward compatibility with Node.js prior to version 6.4.0, both
 may be specified.
 
 <a id="DEP0080"></a>
@@ -743,9 +748,8 @@ file descriptors.
 
 Type: Runtime
 
-`REPLServer.prototype.memory()` is a function only necessary for the
-internal mechanics of the `REPLServer` itself, and is therefore not
-necessary in user space.
+`REPLServer.prototype.memory()` is only necessary for the internal mechanics of
+the `REPLServer` itself. Do not use this function.
 
 <a id="DEP0083"></a>
 ### DEP0083: Disabling ECDH by setting ecdhCurve to false
@@ -793,8 +797,8 @@ code modification is necessary if that is done.
 
 Type: End-of-Life
 
-The AsyncHooks Sensitive API was never documented and had various of minor
-issues, see https://github.com/nodejs/node/issues/15572. Use the `AsyncResource`
+The AsyncHooks Sensitive API was never documented and had various minor issues.
+(See https://github.com/nodejs/node/issues/15572.) Use the `AsyncResource`
 API instead.
 
 <a id="DEP0086"></a>
@@ -802,7 +806,7 @@ API instead.
 
 Type: End-of-Life
 
-`runInAsyncIdScope` doesn't emit the `before` or `after` event and can thus
+`runInAsyncIdScope` doesn't emit the `'before'` or `'after'` event and can thus
 cause a lot of issues. See https://github.com/nodejs/node/issues/14328 for more
 details.
 
@@ -818,14 +822,13 @@ same as the legacy assert but it will always use strict equality checks.
 <a id="DEP0090"></a>
 ### DEP0090: Invalid GCM authentication tag lengths
 
-Type: Runtime
+Type: End-of-Life
 
-Node.js supports all GCM authentication tag lengths which are accepted by
-OpenSSL when calling [`decipher.setAuthTag()`][]. This behavior will change in
-a future version at which point only authentication tag lengths of 128, 120,
-112, 104, 96, 64, and 32 bits will be allowed. Authentication tags whose length
-is not included in this list will be considered invalid in compliance with
-[NIST SP 800-38D][].
+Node.js used to support all GCM authentication tag lengths which are accepted by
+OpenSSL when calling [`decipher.setAuthTag()`][]. Beginning with node REPLACEME,
+only authentication tag lengths of 128, 120, 112, 104, 96, 64, and 32 bits are
+allowed. Authentication tags whose length is not included in this list are
+considered invalid in compliance with [NIST SP 800-38D][].
 
 <a id="DEP0091"></a>
 ### DEP0091: crypto.DEFAULT_ENCODING
@@ -856,9 +859,9 @@ and `crypto.getFips()` instead.
 
 Type: Runtime
 
-Using `assert.fail()` with more than one argument has no benefit over writing an
-individual error message. Either use `assert.fail()` with one argument or switch
-to one of the other assert methods.
+Using `assert.fail()` with more than one argument is deprecated. Use
+`assert.fail()` with only one argument or use a different `assert` module
+method.
 
 <a id="DEP0095"></a>
 ### DEP0095: timers.enroll()
@@ -886,12 +889,13 @@ should start using the `async_context` variant of `MakeCallback` or
 `CallbackScope`, or the high-level `AsyncResource` class.
 
 <a id="DEP0098"></a>
-### DEP0098: AsyncHooks Embedder AsyncResource.emit{Before,After} APIs
+### DEP0098: AsyncHooks Embedder AsyncResource.emitBefore and AsyncResource.emitAfter APIs
 
 Type: Runtime
 
-The embedded API provided by AsyncHooks exposes emit{Before,After} methods
-which are very easy to use incorrectly which can lead to unrecoverable errors.
+The embedded API provided by AsyncHooks exposes `.emitBefore()` and
+`.emitAfter()` methods which are very easy to use incorrectly which can lead
+to unrecoverable errors.
 
 Use [`asyncResource.runInAsyncScope()`][] API instead which provides a much
 safer, and more convenient, alternative. See
@@ -920,7 +924,7 @@ This was never a documented feature.
 
 Type: End-of-Life
 
-The `--with-lttng` compile time option is removed.
+The `--with-lttng` compile-time option has been removed.
 
 <a id="DEP0102"></a>
 ### DEP0102: Using `noAssert` in Buffer#(read|write) operations.
@@ -944,20 +948,20 @@ methods in particular can be replaced by using [`util.types`][].
 
 Type: Documentation-only (supports [`--pending-deprecation`][])
 
-Currently when assigning a property to [`process.env`][], the assigned value is
-implicitly converted to a string if it is not a string. This behavior is
-deprecated if the assigned value is not a string, boolean, or number. In the
-future, such assignment may result in a thrown error. Please convert the
-property to a string before assigning it to `process.env`.
+When assigning a non-string property to [`process.env`][], the assigned value is
+implicitly converted to a string. This behavior is deprecated if the assigned
+value is not a string, boolean, or number. In the future, such assignment may
+result in a thrown error. Please convert the property to a string before
+assigning it to `process.env`.
 
 <a id="DEP0105"></a>
 ### DEP0105: decipher.finaltol
 
-Type: Runtime
+Type: End-of-Life
 
-`decipher.finaltol()` has never been documented and is currently an alias for
-[`decipher.final()`][]. In the future, this API will likely be removed, and it
-is recommended to use [`decipher.final()`][] instead.
+`decipher.finaltol()` has never been documented and was an alias for
+[`decipher.final()`][]. This API has been removed, and it is recommended to use
+[`decipher.final()`][] instead.
 
 <a id="DEP0106"></a>
 ### DEP0106: crypto.createCipher and crypto.createDecipher
@@ -970,6 +974,36 @@ initialization vectors. It is recommended to derive a key using
 [`crypto.pbkdf2()`][] and to use [`crypto.createCipheriv()`][] and
 [`crypto.createDecipheriv()`][] to obtain the [`Cipher`][] and [`Decipher`][]
 objects respectively.
+
+<a id="DEP0107"></a>
+### DEP0107: tls.convertNPNProtocols()
+
+Type: End-of-Life
+
+This was an undocumented helper function not intended for use outside Node.js
+core and obsoleted by the removal of NPN (Next Protocol Negotiation) support.
+
+<a id="DEP0108"></a>
+### DEP0108: zlib.bytesRead
+
+Type: Documentation-only
+
+Deprecated alias for [`zlib.bytesWritten`][]. This original name was chosen
+because it also made sense to interpret the value as the number of bytes
+read by the engine, but is inconsistent with other streams in Node.js that
+expose values under these names.
+
+<a id="DEP0109"></a>
+### DEP0109: http, https, and tls support for invalid URLs
+
+Type: Runtime
+
+Some previously supported (but strictly invalid) URLs were accepted through the
+[`http.request()`][], [`http.get()`][], [`https.request()`][],
+[`https.get()`][], and [`tls.checkServerIdentity()`][] APIs because those were
+accepted by the legacy `url.parse()` API. The mentioned APIs now use the WHATWG
+URL parser that requires strictly valid URLs. Passing an invalid URL is
+deprecated and support will be removed in the future.
 
 [`--pending-deprecation`]: cli.html#cli_pending_deprecation
 [`Buffer.allocUnsafeSlow(size)`]: buffer.html#buffer_class_method_buffer_allocunsafeslow_size
@@ -1012,6 +1046,10 @@ objects respectively.
 [`fs.read()`]: fs.html#fs_fs_read_fd_buffer_offset_length_position_callback
 [`fs.readSync()`]: fs.html#fs_fs_readsync_fd_buffer_offset_length_position
 [`fs.stat()`]: fs.html#fs_fs_stat_path_callback
+[`http.get()`]: http.html#http_http_get_options_callback
+[`http.request()`]: http.html#http_http_request_options_callback
+[`https.get()`]: https.html#https_https_get_options_callback
+[`https.request()`]: https.html#https_https_request_options_callback
 [`os.networkInterfaces`]: os.html#os_os_networkinterfaces
 [`os.tmpdir()`]: os.html#os_os_tmpdir
 [`process.env`]: process.html#process_process_env
@@ -1023,6 +1061,7 @@ objects respectively.
 [`tls.SecureContext`]: tls.html#tls_tls_createsecurecontext_options
 [`tls.SecurePair`]: tls.html#tls_class_securepair
 [`tls.TLSSocket`]: tls.html#tls_class_tls_tlssocket
+[`tls.checkServerIdentity()`]: tls.html#tls_tls_checkserveridentity_host_cert
 [`tls.createSecureContext()`]: tls.html#tls_tls_createsecurecontext_options
 [`util._extend()`]: util.html#util_util_extend_target_source
 [`util.debug()`]: util.html#util_util_debug_string
@@ -1050,6 +1089,7 @@ objects respectively.
 [`util.types`]: util.html#util_util_types
 [`util`]: util.html
 [`worker.exitedAfterDisconnect`]: cluster.html#cluster_worker_exitedafterdisconnect
+[`zlib.bytesWritten`]: zlib.html#zlib_zlib_byteswritten
 [alloc]: buffer.html#buffer_class_method_buffer_alloc_size_fill_encoding
 [alloc_unsafe_size]: buffer.html#buffer_class_method_buffer_allocunsafe_size
 [from_arraybuffer]: buffer.html#buffer_class_method_buffer_from_arraybuffer_byteoffset_length

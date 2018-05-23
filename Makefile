@@ -18,10 +18,8 @@ PWD = $(CURDIR)
 
 ifdef JOBS
   PARALLEL_ARGS = -j $(JOBS)
-endif
-
-ifdef QUICKCHECK
-  QUICKCHECK_ARG := --quickcheck
+else
+  PARALLEL_ARGS = -J
 endif
 
 ifdef ENABLE_V8_TAP
@@ -30,7 +28,6 @@ ifdef ENABLE_V8_TAP
   TAP_V8_BENCHMARKS := --junitout $(PWD)/v8-benchmarks-tap.xml
 endif
 
-V8_BUILD_OPTIONS += GYPFLAGS="-Dclang=0"
 V8_TEST_OPTIONS = $(V8_EXTRA_TEST_OPTIONS)
 ifdef DISABLE_V8_I18N
   V8_BUILD_OPTIONS += i18nsupport=off
@@ -96,7 +93,7 @@ $(NODE_G_EXE): config.gypi out/Makefile
 
 out/Makefile: common.gypi deps/uv/uv.gyp deps/http_parser/http_parser.gyp \
               deps/zlib/zlib.gyp deps/v8/gypfiles/toolchain.gypi \
-              deps/v8/gypfiles/features.gypi deps/v8/src/v8.gyp node.gyp \
+              deps/v8/gypfiles/features.gypi deps/v8/gypfiles/v8.gyp node.gyp \
               config.gypi
 	$(PYTHON) tools/gyp_node.py -f make
 
@@ -168,8 +165,6 @@ coverage: coverage-test ## Run the tests and generate a coverage report.
 .PHONY: coverage-build
 coverage-build: all
 	mkdir -p node_modules
-	if [ ! -d node_modules/istanbul-merge ]; then \
-		$(NODE) ./deps/npm install istanbul-merge --no-save --no-package-lock; fi
 	if [ ! -d node_modules/nyc ]; then \
 		$(NODE) ./deps/npm install nyc --no-save --no-package-lock; fi
 	if [ ! -d gcovr ]; then git clone -b 3.4 --depth=1 \
@@ -198,11 +193,11 @@ coverage-test: coverage-build
 	mv lib lib__
 	mv lib_ lib
 	mkdir -p coverage .cov_tmp
-	$(NODE) ./node_modules/.bin/istanbul-merge --out \
-		.cov_tmp/libcov.json 'out/Release/.coverage/coverage-*.json'
+	$(NODE) ./node_modules/.bin/nyc merge 'out/Release/.coverage' \
+		.cov_tmp/libcov.json
 	(cd lib && .$(NODE) ../node_modules/.bin/nyc report \
 		--temp-directory "$(CURDIR)/.cov_tmp" \
-		--report-dir "../coverage")
+		--report-dir "$(CURDIR)/coverage")
 	-(cd out && "../gcovr/scripts/gcovr" --gcov-exclude='.*deps' \
 		--gcov-exclude='.*usr' -v -r Release/obj.target \
 		--html --html-detail -o ../coverage/cxxcoverage.html \
@@ -233,49 +228,52 @@ endif
 # Rebuilds deps/v8 as a git tree, pulls its third-party dependencies, and
 # builds it.
 v8:
-	tools/make-v8.sh
-	$(MAKE) -C deps/v8 $(V8_ARCH).$(BUILDTYPE_LOWER) $(V8_BUILD_OPTIONS)
+	tools/make-v8.sh $(V8_ARCH).$(BUILDTYPE_LOWER) $(V8_BUILD_OPTIONS)
+
+.PHONY: jstest
+jstest: build-addons build-addons-napi ## Runs addon tests and JS tests
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) --mode=$(BUILDTYPE_LOWER) \
+		--skip-tests=$(CI_SKIP_TESTS) \
+		$(CI_JS_SUITES) \
+		$(CI_NATIVE_SUITES)
 
 .PHONY: test
 # This does not run tests of third-party libraries inside deps.
 test: all ## Runs default tests, linters, and builds docs.
+	# Build the addons before running the tests so the test results
+	# can be displayed together
 	$(MAKE) -s build-addons
 	$(MAKE) -s build-addons-napi
-	$(MAKE) -s doc-only
-	$(MAKE) -s lint
+	$(MAKE) -s test-doc
 	$(MAKE) -s cctest
-	$(PYTHON) tools/test.py --mode=release -J \
-		$(CI_JS_SUITES) \
-		$(CI_NATIVE_SUITES) \
-		$(CI_DOC)
+	$(MAKE) -s jstest
 
 .PHONY: test-only
 test-only: all  ## For a quick test, does not run linter or build docs.
+	# Build the addons before running the tests so the test results
+	# can be displayed together
 	$(MAKE) build-addons
 	$(MAKE) build-addons-napi
 	$(MAKE) cctest
-	$(PYTHON) tools/test.py --mode=release -J \
-		$(CI_JS_SUITES) \
-		$(CI_NATIVE_SUITES)
+	$(MAKE) jstest
 
 # Used by `make coverage-test`
 test-cov: all
+	# Build the addons before running the tests so the test results
+	# can be displayed together
 	$(MAKE) build-addons
 	$(MAKE) build-addons-napi
 	# $(MAKE) cctest
-	$(PYTHON) tools/test.py --mode=release -J \
-		$(CI_JS_SUITES) \
-		$(CI_NATIVE_SUITES)
-	$(MAKE) lint
+	CI_SKIP_TESTS=core_line_numbers.js $(MAKE) jstest
 
 test-parallel: all
-	$(PYTHON) tools/test.py --mode=release parallel -J
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) --mode=$(BUILDTYPE_LOWER) parallel
 
 test-valgrind: all
-	$(PYTHON) tools/test.py --mode=release --valgrind sequential parallel message
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) --mode=$(BUILDTYPE_LOWER) --valgrind sequential parallel message
 
 test-check-deopts: all
-	$(PYTHON) tools/test.py --mode=release --check-deopts parallel sequential -J
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) --mode=$(BUILDTYPE_LOWER) --check-deopts parallel sequential
 
 benchmark/misc/function_call/build/Release/binding.node: all \
 		benchmark/misc/function_call/binding.cc \
@@ -393,12 +391,12 @@ clear-stalled:
 	ps awwx | grep Release/node | grep -v grep | cat
 	@PS_OUT=`ps awwx | grep Release/node | grep -v grep | awk '{print $$1}'`; \
 	if [ "$${PS_OUT}" ]; then \
-		echo $${PS_OUT} | xargs kill; \
+		echo $${PS_OUT} | xargs kill -9; \
 	fi
 
 .PHONY: test-gc
 test-gc: all test/gc/build/Release/binding.node
-	$(PYTHON) tools/test.py --mode=release gc
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) --mode=$(BUILDTYPE_LOWER) gc
 
 .PHONY: test-gc-clean
 test-gc-clean:
@@ -410,10 +408,10 @@ test-build-addons-napi: all build-addons-napi
 
 .PHONY: test-all
 test-all: test-build test/gc/build/Release/binding.node ## Run everything in test/.
-	$(PYTHON) tools/test.py --mode=debug,release
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) --mode=debug,release
 
 test-all-valgrind: test-build
-	$(PYTHON) tools/test.py --mode=debug,release --valgrind
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) --mode=debug,release --valgrind
 
 CI_NATIVE_SUITES ?= addons addons-napi
 CI_JS_SUITES ?= default
@@ -425,7 +423,7 @@ CI_DOC := doctool
 test-ci-native: LOGLEVEL := info
 test-ci-native: | test/addons/.buildstamp test/addons-napi/.buildstamp
 	$(PYTHON) tools/test.py $(PARALLEL_ARGS) -p tap --logfile test.tap \
-		--mode=release --flaky-tests=$(FLAKY_TESTS) \
+		--mode=$(BUILDTYPE_LOWER) --flaky-tests=$(FLAKY_TESTS) \
 		$(TEST_CI_ARGS) $(CI_NATIVE_SUITES)
 
 .PHONY: test-ci-js
@@ -433,13 +431,13 @@ test-ci-native: | test/addons/.buildstamp test/addons-napi/.buildstamp
 # Related CI job: node-test-commit-arm-fanned
 test-ci-js: | clear-stalled
 	$(PYTHON) tools/test.py $(PARALLEL_ARGS) -p tap --logfile test.tap \
-		--mode=release --flaky-tests=$(FLAKY_TESTS) \
+		--mode=$(BUILDTYPE_LOWER) --flaky-tests=$(FLAKY_TESTS) \
 		$(TEST_CI_ARGS) $(CI_JS_SUITES)
 	# Clean up any leftover processes, error if found.
 	ps awwx | grep Release/node | grep -v grep | cat
 	@PS_OUT=`ps awwx | grep Release/node | grep -v grep | awk '{print $$1}'`; \
 	if [ "$${PS_OUT}" ]; then \
-		echo $${PS_OUT} | xargs kill; exit 1; \
+		echo $${PS_OUT} | xargs kill -9; exit 1; \
 	fi
 
 .PHONY: test-ci
@@ -448,13 +446,13 @@ test-ci: LOGLEVEL := info
 test-ci: | clear-stalled build-addons build-addons-napi doc-only
 	out/Release/cctest --gtest_output=tap:cctest.tap
 	$(PYTHON) tools/test.py $(PARALLEL_ARGS) -p tap --logfile test.tap \
-		--mode=release --flaky-tests=$(FLAKY_TESTS) \
+		--mode=$(BUILDTYPE_LOWER) --flaky-tests=$(FLAKY_TESTS) \
 		$(TEST_CI_ARGS) $(CI_JS_SUITES) $(CI_NATIVE_SUITES) $(CI_DOC)
 	# Clean up any leftover processes, error if found.
 	ps awwx | grep Release/node | grep -v grep | cat
 	@PS_OUT=`ps awwx | grep Release/node | grep -v grep | awk '{print $$1}'`; \
 	if [ "$${PS_OUT}" ]; then \
-		echo $${PS_OUT} | xargs kill; exit 1; \
+		echo $${PS_OUT} | xargs kill -9; exit 1; \
 	fi
 
 .PHONY: build-ci
@@ -475,29 +473,29 @@ run-ci: build-ci
 	$(MAKE) test-ci
 
 test-release: test-build
-	$(PYTHON) tools/test.py --mode=release
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) --mode=$(BUILDTYPE_LOWER)
 
 test-debug: test-build
-	$(PYTHON) tools/test.py --mode=debug
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) --mode=debug
 
 test-message: test-build
-	$(PYTHON) tools/test.py message
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) message
 
 test-simple: | cctest  # Depends on 'all'.
-	$(PYTHON) tools/test.py parallel sequential
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) parallel sequential
 
 test-pummel: all
-	$(PYTHON) tools/test.py pummel
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) pummel
 
 test-internet: all
-	$(PYTHON) tools/test.py internet
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) internet
 
 test-node-inspect: $(NODE_EXE)
 	USE_EMBEDDED_NODE_INSPECT=1 $(NODE) tools/test-npm-package \
 		--install deps/node-inspect test
 
 test-tick-processor: all
-	$(PYTHON) tools/test.py tick-processor
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) tick-processor
 
 .PHONY: test-hash-seed
 # Verifies the hash seed used by V8 for hashing is random.
@@ -507,10 +505,10 @@ test-hash-seed: all
 .PHONY: test-doc
 test-doc: doc-only ## Builds, lints, and verifies the docs.
 	$(MAKE) lint
-	$(PYTHON) tools/test.py $(CI_DOC)
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) $(CI_DOC)
 
 test-known-issues: all
-	$(PYTHON) tools/test.py known_issues
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) known_issues
 
 # Related CI job: node-test-npm
 test-npm: $(NODE_EXE) ## Run the npm test suite on deps/npm.
@@ -521,7 +519,7 @@ test-npm-publish: $(NODE_EXE)
 
 .PHONY: test-addons-napi
 test-addons-napi: test-build-addons-napi
-	$(PYTHON) tools/test.py --mode=release addons-napi
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) --mode=$(BUILDTYPE_LOWER) addons-napi
 
 .PHONY: test-addons-napi-clean
 test-addons-napi-clean:
@@ -530,7 +528,7 @@ test-addons-napi-clean:
 
 .PHONY: test-addons
 test-addons: test-build test-addons-napi
-	$(PYTHON) tools/test.py --mode=release addons
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) --mode=$(BUILDTYPE_LOWER) addons
 
 .PHONY: test-addons-clean
 test-addons-clean:
@@ -541,19 +539,19 @@ test-addons-clean:
 
 test-timers:
 	$(MAKE) --directory=tools faketime
-	$(PYTHON) tools/test.py --mode=release timers
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) --mode=$(BUILDTYPE_LOWER) timers
 
 test-timers-clean:
 	$(MAKE) --directory=tools clean
 
 test-async-hooks:
-	$(PYTHON) tools/test.py --mode=release async-hooks
+	$(PYTHON) tools/test.py $(PARALLEL_ARGS) --mode=$(BUILDTYPE_LOWER) async-hooks
 
 test-with-async-hooks:
 	$(MAKE) build-addons
 	$(MAKE) build-addons-napi
 	$(MAKE) cctest
-	NODE_TEST_WITH_ASYNC_HOOKS=1 $(PYTHON) tools/test.py --mode=release -J \
+	NODE_TEST_WITH_ASYNC_HOOKS=1 $(PYTHON) tools/test.py $(PARALLEL_ARGS) --mode=$(BUILDTYPE_LOWER) \
 		$(CI_JS_SUITES) \
 		$(CI_NATIVE_SUITES)
 
@@ -565,31 +563,22 @@ test-with-async-hooks:
 ifneq ("","$(wildcard deps/v8/tools/run-tests.py)")
 # Related CI job: node-test-commit-v8-linux
 test-v8: v8  ## Runs the V8 test suite on deps/v8.
-# Performs a full test unless QUICKCHECK is specified.
-# Note that we cannot run the tests in deps/v8 directly without rebuilding a
-# git tree and using gclient to pull the third-party dependencies, which is
-# done by the `v8` target.
-	deps/v8/tools/run-tests.py --arch=$(V8_ARCH) \
-        --mode=$(BUILDTYPE_LOWER) $(V8_TEST_OPTIONS) $(QUICKCHECK_ARG) \
-        --no-presubmit \
-        --shell-dir=$(PWD)/deps/v8/out/$(V8_ARCH).$(BUILDTYPE_LOWER) \
-	 $(TAP_V8)
-	git clean -fdxq -- deps/v8
+	deps/v8/tools/run-tests.py --gn --arch=$(V8_ARCH) \
+        --mode=$(BUILDTYPE_LOWER) $(V8_TEST_OPTIONS) \
+				mjsunit cctest debugger inspector message preparser \
+	      $(TAP_V8)
 	@echo Testing hash seed
 	$(MAKE) test-hash-seed
 
 test-v8-intl: v8
-# Performs a full test unless QUICKCHECK is specified.
-	deps/v8/tools/run-tests.py --arch=$(V8_ARCH) \
-        --mode=$(BUILDTYPE_LOWER) --no-presubmit $(QUICKCHECK_ARG) \
-        --shell-dir=deps/v8/out/$(V8_ARCH).$(BUILDTYPE_LOWER) intl \
+	deps/v8/tools/run-tests.py --gn --arch=$(V8_ARCH) \
+        --mode=$(BUILDTYPE_LOWER) intl \
         $(TAP_V8_INTL)
 
 test-v8-benchmarks: v8
-	deps/v8/tools/run-tests.py --arch=$(V8_ARCH) --mode=$(BUILDTYPE_LOWER) \
-        --download-data $(QUICKCHECK_ARG) --no-presubmit \
-        --shell-dir=deps/v8/out/$(V8_ARCH).$(BUILDTYPE_LOWER) benchmarks \
-	 $(TAP_V8_BENCHMARKS)
+	deps/v8/tools/run-tests.py --gn --arch=$(V8_ARCH) --mode=$(BUILDTYPE_LOWER) \
+        benchmarks \
+	      $(TAP_V8_BENCHMARKS)
 
 test-v8-all: test-v8 test-v8-intl test-v8-benchmarks
 # runs all v8 tests
@@ -661,7 +650,7 @@ tools/doc/node_modules/js-yaml/package.json:
 
 gen-json = tools/doc/generate.js --format=json $< > $@
 gen-html = tools/doc/generate.js --node-version=$(FULLVERSION) --format=html \
-			--template=doc/template.html --analytics=$(DOCS_ANALYTICS) $< > $@
+			--analytics=$(DOCS_ANALYTICS) $< > $@
 
 out/doc/api/%.json: doc/api/%.md
 	$(call available-node, $(gen-json))
@@ -822,8 +811,8 @@ release-only:
 		exit 1 ; \
 	fi
 	@if [ "$(DISTTYPE)" != "nightly" ] && [ "$(DISTTYPE)" != "next-nightly" ] && \
-		`grep -q DEP00XX doc/api/deprecations.md`; then \
-		echo 'Please update DEP00XX in doc/api/deprecations.md (See doc/releases.md)' ; \
+		`grep -q DEP...X doc/api/deprecations.md`; then \
+		echo 'Please update DEP...X in doc/api/deprecations.md (See doc/releases.md)' ; \
 		exit 1 ; \
 	fi
 	@if [ "$(shell git status --porcelain | egrep -v '^\?\? ')" = "" ]; then \
@@ -1133,7 +1122,8 @@ lint-js-ci:
 jslint-ci: lint-js-ci
 	@echo "Please use lint-js-ci instead of jslint-ci"
 
-LINT_CPP_ADDON_DOC_FILES = $(wildcard test/addons/??_*/*.cc test/addons/??_*/*.h)
+LINT_CPP_ADDON_DOC_FILES_GLOB = test/addons/??_*/*.cc test/addons/??_*/*.h
+LINT_CPP_ADDON_DOC_FILES = $(wildcard $(LINT_CPP_ADDON_DOC_FILES_GLOB))
 LINT_CPP_EXCLUDE ?=
 LINT_CPP_EXCLUDE += src/node_root_certs.h
 LINT_CPP_EXCLUDE += $(LINT_CPP_ADDON_DOC_FILES)
@@ -1176,7 +1166,7 @@ tools/.cpplintstamp: $(LINT_CPP_FILES)
 
 lint-addon-docs: test/addons/.docbuildstamp
 	@echo "Running C++ linter on addon docs..."
-	@$(PYTHON) tools/cpplint.py --filter=$(ADDON_DOC_LINT_FLAGS) $(LINT_CPP_ADDON_DOC_FILES)
+	@$(PYTHON) tools/cpplint.py --filter=$(ADDON_DOC_LINT_FLAGS) $(LINT_CPP_ADDON_DOC_FILES_GLOB)
 
 cpplint: lint-cpp
 	@echo "Please use lint-cpp instead of cpplint"

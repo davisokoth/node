@@ -25,14 +25,14 @@ tmpdir.refresh();
 process.chdir(tmpdir.path);
 
 const proc = cp.spawn(process.execPath,
-                      [ '--trace-events-enabled',
-                        '--trace-event-categories', 'custom',
+                      [ '--trace-event-categories', 'custom',
                         '-e', CODE ]);
 
 proc.once('exit', common.mustCall(() => {
   assert(common.fileExists(FILE_NAME));
   fs.readFile(FILE_NAME, common.mustCall((err, data) => {
-    const traces = JSON.parse(data.toString()).traceEvents;
+    const traces = JSON.parse(data.toString()).traceEvents
+      .filter((trace) => trace.cat !== '__metadata');
     assert.strictEqual(traces.length, 3);
 
     assert.strictEqual(traces[0].pid, proc.pid);

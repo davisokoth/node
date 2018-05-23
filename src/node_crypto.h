@@ -44,6 +44,8 @@
 #endif  // !OPENSSL_NO_ENGINE
 #include <openssl/err.h>
 #include <openssl/evp.h>
+// TODO(shigeki) Remove this after upgrading to 1.1.1
+#include <openssl/obj_mac.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
@@ -73,6 +75,32 @@ struct MarkPopErrorOnReturn {
   ~MarkPopErrorOnReturn() { ERR_pop_to_mark(); }
 };
 
+template <typename T, void (*function)(T*)>
+struct FunctionDeleter {
+  void operator()(T* pointer) const { function(pointer); }
+  typedef std::unique_ptr<T, FunctionDeleter> Pointer;
+};
+
+template <typename T, void (*function)(T*)>
+using DeleteFnPtr = typename FunctionDeleter<T, function>::Pointer;
+
+// Define smart pointers for the most commonly used OpenSSL types:
+using X509Pointer = DeleteFnPtr<X509, X509_free>;
+using BIOPointer = DeleteFnPtr<BIO, BIO_free_all>;
+using SSLCtxPointer = DeleteFnPtr<SSL_CTX, SSL_CTX_free>;
+using SSLSessionPointer = DeleteFnPtr<SSL_SESSION, SSL_SESSION_free>;
+using SSLPointer = DeleteFnPtr<SSL, SSL_free>;
+using EVPKeyPointer = DeleteFnPtr<EVP_PKEY, EVP_PKEY_free>;
+using EVPKeyCtxPointer = DeleteFnPtr<EVP_PKEY_CTX, EVP_PKEY_CTX_free>;
+using EVPMDPointer = DeleteFnPtr<EVP_MD_CTX, EVP_MD_CTX_free>;
+using RSAPointer = DeleteFnPtr<RSA, RSA_free>;
+using BignumPointer = DeleteFnPtr<BIGNUM, BN_free>;
+using NetscapeSPKIPointer = DeleteFnPtr<NETSCAPE_SPKI, NETSCAPE_SPKI_free>;
+using ECGroupPointer = DeleteFnPtr<EC_GROUP, EC_GROUP_free>;
+using ECPointPointer = DeleteFnPtr<EC_POINT, EC_POINT_free>;
+using ECKeyPointer = DeleteFnPtr<EC_KEY, EC_KEY_free>;
+using DHPointer = DeleteFnPtr<DH, DH_free>;
+
 enum CheckResult {
   CHECK_CERT_REVOKED = 0,
   CHECK_OK = 1
@@ -85,14 +113,14 @@ extern void UseExtraCaCerts(const std::string& file);
 class SecureContext : public BaseObject {
  public:
   ~SecureContext() override {
-    FreeCTXMem();
+    Reset();
   }
 
   static void Initialize(Environment* env, v8::Local<v8::Object> target);
 
-  SSL_CTX* ctx_;
-  X509* cert_;
-  X509* issuer_;
+  SSLCtxPointer ctx_;
+  X509Pointer cert_;
+  X509Pointer issuer_;
 #ifndef OPENSSL_NO_ENGINE
   bool client_cert_engine_provided_ = false;
 #endif  // !OPENSSL_NO_ENGINE
@@ -148,7 +176,6 @@ class SecureContext : public BaseObject {
       const v8::FunctionCallbackInfo<v8::Value>& args);
   static void EnableTicketKeyCallback(
       const v8::FunctionCallbackInfo<v8::Value>& args);
-  static void CtxGetter(const v8::FunctionCallbackInfo<v8::Value>& info);
 
   template <bool primary>
   static void GetCertificate(const v8::FunctionCallbackInfo<v8::Value>& args);
@@ -170,28 +197,16 @@ class SecureContext : public BaseObject {
 #endif
 
   SecureContext(Environment* env, v8::Local<v8::Object> wrap)
-      : BaseObject(env, wrap),
-        ctx_(nullptr),
-        cert_(nullptr),
-        issuer_(nullptr) {
-    MakeWeak<SecureContext>(this);
+      : BaseObject(env, wrap) {
+    MakeWeak();
     env->isolate()->AdjustAmountOfExternalAllocatedMemory(kExternalSize);
   }
 
-  void FreeCTXMem() {
-    if (!ctx_) {
-      return;
-    }
-
+  inline void Reset() {
     env()->isolate()->AdjustAmountOfExternalAllocatedMemory(-kExternalSize);
-    SSL_CTX_free(ctx_);
-    if (cert_ != nullptr)
-      X509_free(cert_);
-    if (issuer_ != nullptr)
-      X509_free(issuer_);
-    ctx_ = nullptr;
-    cert_ = nullptr;
-    issuer_ = nullptr;
+    ctx_.reset();
+    cert_.reset();
+    issuer_.reset();
   }
 };
 
@@ -214,20 +229,15 @@ class SSLWrap {
         cert_cb_(nullptr),
         cert_cb_arg_(nullptr),
         cert_cb_running_(false) {
-    ssl_ = SSL_new(sc->ctx_);
+    ssl_.reset(SSL_new(sc->ctx_.get()));
+    CHECK(ssl_);
     env_->isolate()->AdjustAmountOfExternalAllocatedMemory(kExternalSize);
-    CHECK_NE(ssl_, nullptr);
   }
 
   virtual ~SSLWrap() {
     DestroySSL();
-    if (next_sess_ != nullptr) {
-      SSL_SESSION_free(next_sess_);
-      next_sess_ = nullptr;
-    }
   }
 
-  inline SSL* ssl() const { return ssl_; }
   inline void enable_session_callbacks() { session_callbacks_ = true; }
   inline bool is_server() const { return kind_ == kServer; }
   inline bool is_client() const { return kind_ == kClient; }
@@ -249,7 +259,7 @@ class SSLWrap {
   static const int64_t kExternalSize = 4448 + 1024 + 42 * 1024;
 #endif
 
-  static void InitNPN(SecureContext* sc);
+  static void ConfigureSecureContext(SecureContext* sc);
   static void AddMethods(Environment* env, v8::Local<v8::FunctionTemplate> t);
 
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
@@ -295,22 +305,6 @@ class SSLWrap {
       const v8::FunctionCallbackInfo<v8::Value>& args);
 #endif  // SSL_set_max_send_fragment
 
-#ifndef OPENSSL_NO_NEXTPROTONEG
-  static void GetNegotiatedProto(
-      const v8::FunctionCallbackInfo<v8::Value>& args);
-  static void SetNPNProtocols(const v8::FunctionCallbackInfo<v8::Value>& args);
-  static int AdvertiseNextProtoCallback(SSL* s,
-                                        const unsigned char** data,
-                                        unsigned int* len,
-                                        void* arg);
-  static int SelectNextProtoCallback(SSL* s,
-                                     unsigned char** out,
-                                     unsigned char* outlen,
-                                     const unsigned char* in,
-                                     unsigned int inlen,
-                                     void* arg);
-#endif  // OPENSSL_NO_NEXTPROTONEG
-
   static void GetALPNNegotiatedProto(
       const v8::FunctionCallbackInfo<v8::Value>& args);
   static void SetALPNProtocols(const v8::FunctionCallbackInfo<v8::Value>& args);
@@ -334,8 +328,8 @@ class SSLWrap {
 
   Environment* const env_;
   Kind kind_;
-  SSL_SESSION* next_sess_;
-  SSL* ssl_;
+  SSLSessionPointer next_sess_;
+  SSLPointer ssl_;
   bool session_callbacks_;
   bool new_session_wait_;
 
@@ -359,10 +353,6 @@ class SSLWrap {
 
 class CipherBase : public BaseObject {
  public:
-  ~CipherBase() override {
-    EVP_CIPHER_CTX_free(ctx_);
-  }
-
   static void Initialize(Environment* env, v8::Local<v8::Object> target);
 
  protected:
@@ -370,19 +360,33 @@ class CipherBase : public BaseObject {
     kCipher,
     kDecipher
   };
+  enum UpdateResult {
+    kSuccess,
+    kErrorMessageSize,
+    kErrorState
+  };
+  static const unsigned kNoAuthTagLength = static_cast<unsigned>(-1);
 
-  void Init(const char* cipher_type, const char* key_buf, int key_buf_len);
+  void Init(const char* cipher_type,
+            const char* key_buf,
+            int key_buf_len,
+            unsigned int auth_tag_len);
   void InitIv(const char* cipher_type,
               const char* key,
               int key_len,
               const char* iv,
-              int iv_len);
-  bool Update(const char* data, int len, unsigned char** out, int* out_len);
+              int iv_len,
+              unsigned int auth_tag_len);
+  bool InitAuthenticated(const char *cipher_type, int iv_len,
+                         unsigned int auth_tag_len);
+  bool CheckCCMMessageLength(int message_len);
+  UpdateResult Update(const char* data, int len, unsigned char** out,
+                      int* out_len);
   bool Final(unsigned char** out, int *out_len);
   bool SetAutoPadding(bool auto_padding);
 
   bool IsAuthenticatedMode() const;
-  bool SetAAD(const char* data, unsigned int len);
+  bool SetAAD(const char* data, unsigned int len, int plaintext_len);
 
   static void New(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void Init(const v8::FunctionCallbackInfo<v8::Value>& args);
@@ -401,21 +405,24 @@ class CipherBase : public BaseObject {
       : BaseObject(env, wrap),
         ctx_(nullptr),
         kind_(kind),
-        auth_tag_len_(0) {
-    MakeWeak<CipherBase>(this);
+        auth_tag_set_(false),
+        auth_tag_len_(kNoAuthTagLength),
+        pending_auth_failed_(false) {
+    MakeWeak();
   }
 
  private:
-  EVP_CIPHER_CTX* ctx_;
+  DeleteFnPtr<EVP_CIPHER_CTX, EVP_CIPHER_CTX_free> ctx_;
   const CipherKind kind_;
+  bool auth_tag_set_;
   unsigned int auth_tag_len_;
   char auth_tag_[EVP_GCM_TLS_TAG_LEN];
+  bool pending_auth_failed_;
+  int max_message_size_;
 };
 
 class Hmac : public BaseObject {
  public:
-  ~Hmac() override;
-
   static void Initialize(Environment* env, v8::Local<v8::Object> target);
 
  protected:
@@ -430,17 +437,15 @@ class Hmac : public BaseObject {
   Hmac(Environment* env, v8::Local<v8::Object> wrap)
       : BaseObject(env, wrap),
         ctx_(nullptr) {
-    MakeWeak<Hmac>(this);
+    MakeWeak();
   }
 
  private:
-  HMAC_CTX* ctx_;
+  DeleteFnPtr<HMAC_CTX, HMAC_CTX_free> ctx_;
 };
 
 class Hash : public BaseObject {
  public:
-  ~Hash() override;
-
   static void Initialize(Environment* env, v8::Local<v8::Object> target);
 
   bool HashInit(const char* hash_type);
@@ -455,11 +460,11 @@ class Hash : public BaseObject {
       : BaseObject(env, wrap),
         mdctx_(nullptr),
         finalized_(false) {
-    MakeWeak<Hash>(this);
+    MakeWeak();
   }
 
  private:
-  EVP_MD_CTX* mdctx_;
+  EVPMDPointer mdctx_;
   bool finalized_;
 };
 
@@ -476,11 +481,8 @@ class SignBase : public BaseObject {
   } Error;
 
   SignBase(Environment* env, v8::Local<v8::Object> wrap)
-      : BaseObject(env, wrap),
-        mdctx_(nullptr) {
+      : BaseObject(env, wrap) {
   }
-
-  ~SignBase() override;
 
   Error Init(const char* sign_type);
   Error Update(const char* data, int len);
@@ -488,7 +490,7 @@ class SignBase : public BaseObject {
  protected:
   void CheckThrow(Error error);
 
-  EVP_MD_CTX* mdctx_;
+  EVPMDPointer mdctx_;
 };
 
 class Sign : public SignBase {
@@ -510,7 +512,7 @@ class Sign : public SignBase {
   static void SignFinal(const v8::FunctionCallbackInfo<v8::Value>& args);
 
   Sign(Environment* env, v8::Local<v8::Object> wrap) : SignBase(env, wrap) {
-    MakeWeak<Sign>(this);
+    MakeWeak();
   }
 };
 
@@ -533,7 +535,7 @@ class Verify : public SignBase {
   static void VerifyFinal(const v8::FunctionCallbackInfo<v8::Value>& args);
 
   Verify(Environment* env, v8::Local<v8::Object> wrap) : SignBase(env, wrap) {
-    MakeWeak<Verify>(this);
+    MakeWeak();
   }
 };
 
@@ -569,12 +571,6 @@ class PublicKeyCipher {
 
 class DiffieHellman : public BaseObject {
  public:
-  ~DiffieHellman() override {
-    if (dh != nullptr) {
-      DH_free(dh);
-    }
-  }
-
   static void Initialize(Environment* env, v8::Local<v8::Object> target);
 
   bool Init(int primeLength, int g);
@@ -599,9 +595,8 @@ class DiffieHellman : public BaseObject {
   DiffieHellman(Environment* env, v8::Local<v8::Object> wrap)
       : BaseObject(env, wrap),
         initialised_(false),
-        verifyError_(0),
-        dh(nullptr) {
-    MakeWeak<DiffieHellman>(this);
+        verifyError_(0) {
+    MakeWeak();
   }
 
  private:
@@ -614,30 +609,27 @@ class DiffieHellman : public BaseObject {
 
   bool initialised_;
   int verifyError_;
-  DH* dh;
+  DHPointer dh_;
 };
 
 class ECDH : public BaseObject {
  public:
   ~ECDH() override {
-    if (key_ != nullptr)
-      EC_KEY_free(key_);
-    key_ = nullptr;
     group_ = nullptr;
   }
 
   static void Initialize(Environment* env, v8::Local<v8::Object> target);
-  static EC_POINT* BufferToPoint(Environment* env,
-                                 const EC_GROUP* group,
-                                 char* data,
-                                 size_t len);
+  static ECPointPointer BufferToPoint(Environment* env,
+                                      const EC_GROUP* group,
+                                      char* data,
+                                      size_t len);
 
  protected:
-  ECDH(Environment* env, v8::Local<v8::Object> wrap, EC_KEY* key)
+  ECDH(Environment* env, v8::Local<v8::Object> wrap, ECKeyPointer&& key)
       : BaseObject(env, wrap),
-        key_(key),
-        group_(EC_KEY_get0_group(key_)) {
-    MakeWeak<ECDH>(this);
+        key_(std::move(key)),
+        group_(EC_KEY_get0_group(key_.get())) {
+    MakeWeak();
     CHECK_NE(group_, nullptr);
   }
 
@@ -650,9 +642,9 @@ class ECDH : public BaseObject {
   static void SetPublicKey(const v8::FunctionCallbackInfo<v8::Value>& args);
 
   bool IsKeyPairValid();
-  bool IsKeyValidForCurve(const BIGNUM* private_key);
+  bool IsKeyValidForCurve(const BignumPointer& private_key);
 
-  EC_KEY* key_;
+  ECKeyPointer key_;
   const EC_GROUP* group_;
 };
 

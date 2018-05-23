@@ -23,6 +23,7 @@
 #include "env-inl.h"
 #include "util-inl.h"
 #include "node.h"
+#include "node_internals.h"
 #include "handle_wrap.h"
 #include "string_bytes.h"
 
@@ -77,11 +78,12 @@ FSEventWrap::FSEventWrap(Environment* env, Local<Object> object)
     : HandleWrap(env,
                  object,
                  reinterpret_cast<uv_handle_t*>(&handle_),
-                 AsyncWrap::PROVIDER_FSEVENTWRAP) {}
+                 AsyncWrap::PROVIDER_FSEVENTWRAP) {
+  MarkAsUninitialized();
+}
 
 
 FSEventWrap::~FSEventWrap() {
-  CHECK_EQ(initialized_, false);
 }
 
 void FSEventWrap::GetInitialized(const FunctionCallbackInfo<Value>& args) {
@@ -130,7 +132,7 @@ void FSEventWrap::New(const FunctionCallbackInfo<Value>& args) {
 void FSEventWrap::Start(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
 
-  FSEventWrap* wrap = Unwrap<FSEventWrap>(args.Holder());
+  FSEventWrap* wrap = Unwrap<FSEventWrap>(args.This());
   CHECK_NE(wrap, nullptr);
   CHECK(!wrap->initialized_);
 
@@ -152,6 +154,7 @@ void FSEventWrap::Start(const FunctionCallbackInfo<Value>& args) {
   }
 
   err = uv_fs_event_start(&wrap->handle_, OnEvent, *path, flags);
+  wrap->MarkAsInitialized();
   wrap->initialized_ = true;
 
   if (err != 0) {

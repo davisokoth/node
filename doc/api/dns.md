@@ -56,7 +56,7 @@ dns.resolve4('archive.org', (err, addresses) => {
 There are subtle consequences in choosing one over the other, please consult
 the [Implementation considerations section][] for more information.
 
-## Class dns.Resolver
+## Class: dns.Resolver
 <!-- YAML
 added: v8.3.0
 -->
@@ -66,7 +66,7 @@ An independent resolver for DNS requests.
 Note that creating a new resolver uses the default server settings. Setting
 the servers used for a resolver using
 [`resolver.setServers()`][`dns.setServers()`] does not affect
-other resolver:
+other resolvers:
 
 ```js
 const { Resolver } = require('dns');
@@ -110,6 +110,8 @@ callbacks will be called with an error with code `ECANCELLED`.
 added: v0.11.3
 -->
 
+* Returns: {string[]}
+
 Returns an array of IP address strings, formatted according to [rfc5952][],
 that are currently configured for DNS resolution. A string will include a port
 section if a custom port is used.
@@ -139,9 +141,9 @@ changes:
   - `hints` {number} One or more [supported `getaddrinfo` flags][]. Multiple
     flags may be passed by bitwise `OR`ing their values.
   - `all` {boolean} When `true`, the callback returns all resolved addresses in
-    an array. Otherwise, returns a single address. **Default:** `false`
+    an array. Otherwise, returns a single address. **Default:** `false`.
   - `verbatim` {boolean} When `true`, the callback receives IPv4 and IPv6
-    addresses in the order the DNS resolver returned them.  When `false`,
+    addresses in the order the DNS resolver returned them. When `false`,
     IPv4 addresses are placed before IPv6 addresses.
     **Default:** currently `false` (addresses are reordered) but this is
     expected to change in the not too distant future.
@@ -192,7 +194,7 @@ dns.lookup('example.com', options, (err, addresses) =>
 ```
 
 If this method is invoked as its [`util.promisify()`][]ed version, and `all`
-is not set to `true`, it returns a Promise for an object with `address` and
+is not set to `true`, it returns a `Promise` for an `Object` with `address` and
 `family` properties.
 
 ### Supported getaddrinfo flags
@@ -236,14 +238,14 @@ dns.lookupService('127.0.0.1', 22, (err, hostname, service) => {
 ```
 
 If this method is invoked as its [`util.promisify()`][]ed version, it returns a
-Promise for an object with `hostname` and `service` properties.
+`Promise` for an `Object` with `hostname` and `service` properties.
 
 ## dns.resolve(hostname[, rrtype], callback)
 <!-- YAML
 added: v0.1.27
 -->
 - `hostname` {string} Hostname to resolve.
-- `rrtype` {string} Resource record type. **Default:** `'A'`
+- `rrtype` {string} Resource record type. **Default:** `'A'`.
 - `callback` {Function}
   - `err` {Error}
   - `records` {string[] | Object[] | Object}
@@ -294,7 +296,6 @@ Uses the DNS protocol to resolve a IPv4 addresses (`A` records) for the
 will contain an array of IPv4 addresses (e.g.
 `['74.125.79.104', '74.125.79.105', '74.125.79.106']`).
 
-
 ## dns.resolve6(hostname[, options], callback)
 <!-- YAML
 added: v0.1.16
@@ -317,7 +318,6 @@ changes:
 Uses the DNS protocol to resolve a IPv6 addresses (`AAAA` records) for the
 `hostname`. The `addresses` argument passed to the `callback` function
 will contain an array of IPv6 addresses.
-
 
 ## dns.resolveCname(hostname, callback)
 <!-- YAML
@@ -499,16 +499,16 @@ will be present on the object:
 
 | Type | Properties |
 |------|------------|
-| `"A"` | `address` / `ttl` |
-| `"AAAA"` | `address` / `ttl` |
-| `"CNAME"` | `value` |
-| `"MX"` | Refer to [`dns.resolveMx()`][] |
-| `"NAPTR"` | Refer to [`dns.resolveNaptr()`][] |
-| `"NS"` | `value` |
-| `"PTR"` | `value` |
-| `"SOA"` | Refer to [`dns.resolveSoa()`][] |
-| `"SRV"` | Refer to [`dns.resolveSrv()`][] |
-| `"TXT"` | This type of record contains an array property called `entries` which refers to [`dns.resolveTxt()`][], eg. `{ entries: ['...'], type: 'TXT' }` |
+| `'A'` | `address` / `ttl` |
+| `'AAAA'` | `address` / `ttl` |
+| `'CNAME'` | `value` |
+| `'MX'` | Refer to [`dns.resolveMx()`][] |
+| `'NAPTR'` | Refer to [`dns.resolveNaptr()`][] |
+| `'NS'` | `value` |
+| `'PTR'` | `value` |
+| `'SOA'` | Refer to [`dns.resolveSoa()`][] |
+| `'SRV'` | Refer to [`dns.resolveSrv()`][] |
+| `'TXT'` | This type of record contains an array property called `entries` which refers to [`dns.resolveTxt()`][], eg. `{ entries: ['...'], type: 'TXT' }` |
 
 Here is an example of the `ret` object passed to the callback:
 
@@ -593,8 +593,8 @@ Each DNS query can return one of the following error codes:
 - `dns.NONAME`: Given hostname is not numeric.
 - `dns.BADHINTS`: Illegal hints flags specified.
 - `dns.NOTINITIALIZED`: c-ares library initialization not yet performed.
-- `dns.LOADIPHLPAPI`: Error loading iphlpapi.dll.
-- `dns.ADDRGETNETWORKPARAMS`: Could not find GetNetworkParams function.
+- `dns.LOADIPHLPAPI`: Error loading `iphlpapi.dll`.
+- `dns.ADDRGETNETWORKPARAMS`: Could not find `GetNetworkParams` function.
 - `dns.CANCELLED`: DNS query cancelled.
 
 ## Implementation considerations

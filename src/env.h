@@ -36,12 +36,13 @@
 #include "v8.h"
 #include "node.h"
 #include "node_http2_state.h"
+#include "tracing/agent.h"
 
 #include <list>
-#include <map>
 #include <stdint.h>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 
 struct nghttp2_rcbuf;
 
@@ -104,8 +105,6 @@ struct PackageConfig {
   V(contextify_context_private_symbol, "node:contextify:context")             \
   V(contextify_global_private_symbol, "node:contextify:global")               \
   V(decorated_private_symbol, "node:decorated")                               \
-  V(npn_buffer_private_symbol, "node:npnBuffer")                              \
-  V(selected_npn_buffer_private_symbol, "node:selectedNpnBuffer")             \
   V(napi_env, "node:napi:env")                                                \
   V(napi_wrapper, "node:napi:wrapper")                                        \
 
@@ -120,6 +119,7 @@ struct PackageConfig {
   V(bytes_string, "bytes")                                                    \
   V(bytes_parsed_string, "bytesParsed")                                       \
   V(bytes_read_string, "bytesRead")                                           \
+  V(bytes_written_string, "bytesWritten")                                     \
   V(cached_data_string, "cachedData")                                         \
   V(cached_data_produced_string, "cachedDataProduced")                        \
   V(cached_data_rejected_string, "cachedDataRejected")                        \
@@ -167,11 +167,13 @@ struct PackageConfig {
   V(fingerprint_string, "fingerprint")                                        \
   V(fingerprint256_string, "fingerprint256")                                  \
   V(flags_string, "flags")                                                    \
+  V(fragment_string, "fragment")                                              \
   V(get_data_clone_error_string, "_getDataCloneError")                        \
   V(get_shared_array_buffer_id_string, "_getSharedArrayBufferId")             \
   V(gid_string, "gid")                                                        \
   V(handle_string, "handle")                                                  \
   V(homedir_string, "homedir")                                                \
+  V(host_string, "host")                                                      \
   V(hostmaster_string, "hostmaster")                                          \
   V(ignore_string, "ignore")                                                  \
   V(infoaccess_string, "infoAccess")                                          \
@@ -228,6 +230,7 @@ struct PackageConfig {
   V(order_string, "order")                                                    \
   V(owner_string, "owner")                                                    \
   V(parse_error_string, "Parse Error")                                        \
+  V(password_string, "password")                                              \
   V(path_string, "path")                                                      \
   V(pending_handle_string, "pendingHandle")                                   \
   V(pbkdf2_error_string, "PBKDF2 Error")                                      \
@@ -238,9 +241,9 @@ struct PackageConfig {
   V(port_string, "port")                                                      \
   V(preference_string, "preference")                                          \
   V(priority_string, "priority")                                              \
-  V(produce_cached_data_string, "produceCachedData")                          \
   V(promise_string, "promise")                                                \
   V(pubkey_string, "pubkey")                                                  \
+  V(query_string, "query")                                                    \
   V(raw_string, "raw")                                                        \
   V(read_host_object_string, "_readHostObject")                               \
   V(readable_string, "readable")                                              \
@@ -249,6 +252,7 @@ struct PackageConfig {
   V(rename_string, "rename")                                                  \
   V(replacement_string, "replacement")                                        \
   V(retry_string, "retry")                                                    \
+  V(scheme_string, "scheme")                                                  \
   V(serial_string, "serial")                                                  \
   V(scopeid_string, "scopeid")                                                \
   V(serial_number_string, "serialNumber")                                     \
@@ -295,24 +299,25 @@ struct PackageConfig {
 
 #define ENVIRONMENT_STRONG_PERSISTENT_PROPERTIES(V)                           \
   V(as_external, v8::External)                                                \
+  V(async_hooks_after_function, v8::Function)                                 \
+  V(async_hooks_before_function, v8::Function)                                \
+  V(async_hooks_binding, v8::Object)                                          \
   V(async_hooks_destroy_function, v8::Function)                               \
   V(async_hooks_init_function, v8::Function)                                  \
-  V(async_hooks_before_function, v8::Function)                                \
-  V(async_hooks_after_function, v8::Function)                                 \
   V(async_hooks_promise_resolve_function, v8::Function)                       \
-  V(async_hooks_binding, v8::Object)                                          \
   V(buffer_prototype_object, v8::Object)                                      \
   V(context, v8::Context)                                                     \
   V(domain_callback, v8::Function)                                            \
+  V(fdclose_constructor_template, v8::ObjectTemplate)                         \
   V(fd_constructor_template, v8::ObjectTemplate)                              \
   V(filehandlereadwrap_template, v8::ObjectTemplate)                          \
   V(fsreqpromise_constructor_template, v8::ObjectTemplate)                    \
-  V(fdclose_constructor_template, v8::ObjectTemplate)                         \
+  V(fs_use_promises_symbol, v8::Symbol)                                       \
   V(host_import_module_dynamically_callback, v8::Function)                    \
   V(host_initialize_import_meta_object_callback, v8::Function)                \
   V(http2ping_constructor_template, v8::ObjectTemplate)                       \
-  V(http2stream_constructor_template, v8::ObjectTemplate)                     \
   V(http2settings_constructor_template, v8::ObjectTemplate)                   \
+  V(http2stream_constructor_template, v8::ObjectTemplate)                     \
   V(immediate_callback_function, v8::Function)                                \
   V(inspector_console_api_object, v8::Object)                                 \
   V(pbkdf2_constructor_template, v8::ObjectTemplate)                          \
@@ -337,8 +342,7 @@ struct PackageConfig {
   V(udp_constructor_function, v8::Function)                                   \
   V(vm_parsing_context_symbol, v8::Symbol)                                    \
   V(url_constructor_function, v8::Function)                                   \
-  V(write_wrap_template, v8::ObjectTemplate)                                  \
-  V(fs_use_promises_symbol, v8::Symbol)
+  V(write_wrap_template, v8::ObjectTemplate)
 
 class Environment;
 
@@ -551,7 +555,9 @@ class Environment {
   static uv_key_t thread_local_env;
   static inline Environment* GetThreadLocalEnv();
 
-  Environment(IsolateData* isolate_data, v8::Local<v8::Context> context);
+  Environment(IsolateData* isolate_data,
+              v8::Local<v8::Context> context,
+              tracing::Agent* tracing_agent);
   ~Environment();
 
   void Start(int argc,
@@ -571,10 +577,14 @@ class Environment {
 
   void RegisterHandleCleanups();
   void CleanupHandles();
+
+  // Register clean-up cb to be called on environment destruction.
   inline void RegisterHandleCleanup(uv_handle_t* handle,
                                     HandleCleanupCb cb,
                                     void *arg);
-  inline void FinishHandleCleanup(uv_handle_t* handle);
+
+  template <typename T, typename OnCloseCallback>
+  inline void CloseHandle(T* handle, OnCloseCallback callback);
 
   inline void AssignToContext(v8::Local<v8::Context> context,
                               const ContextInfo& info);
@@ -583,12 +593,16 @@ class Environment {
   void StopProfilerIdleNotifier();
 
   inline v8::Isolate* isolate() const;
+  inline tracing::Agent* tracing_agent() const;
   inline uv_loop_t* event_loop() const;
   inline uint32_t watched_providers() const;
 
   static inline Environment* from_immediate_check_handle(uv_check_t* handle);
   inline uv_check_t* immediate_check_handle();
   inline uv_idle_t* immediate_idle_handle();
+
+  inline void IncreaseWaitingRequestCounter();
+  inline void DecreaseWaitingRequestCounter();
 
   inline AsyncHooks* async_hooks();
   inline ImmediateInfo* immediate_info();
@@ -637,16 +651,20 @@ class Environment {
   inline bool http_parser_buffer_in_use() const;
   inline void set_http_parser_buffer_in_use(bool in_use);
 
-  inline http2::http2_state* http2_state() const;
-  inline void set_http2_state(std::unique_ptr<http2::http2_state> state);
+  inline http2::Http2State* http2_state() const;
+  inline void set_http2_state(std::unique_ptr<http2::Http2State> state);
 
   inline AliasedBuffer<double, v8::Float64Array>* fs_stats_field_array();
+
+  // stat fields contains twice the number of entries because `fs.StatWatcher`
+  // needs room to store data for *two* `fs.Stats` instances.
+  static const int kFsStatsFieldsLength = 14;
 
   inline std::vector<std::unique_ptr<fs::FileHandleReadWrap>>&
       file_handle_read_wrap_freelist();
 
   inline performance::performance_state* performance_state();
-  inline std::map<std::string, uint64_t>* performance_marks();
+  inline std::unordered_map<std::string, uint64_t>* performance_marks();
 
   void CollectExceptionInfo(v8::Local<v8::Value> context,
                             int errorno,
@@ -660,6 +678,12 @@ class Environment {
                               const char* message = nullptr,
                               const char* path = nullptr,
                               const char* dest = nullptr);
+
+  // If this flag is set, calls into JS (if they would be observable
+  // from userland) must be avoided.  This flag does not indicate whether
+  // calling into JS is allowed from a VM perspective at this point.
+  inline bool can_call_into_js() const;
+  inline void set_can_call_into_js(bool can_call_into_js);
 
   inline void ThrowError(const char* errmsg);
   inline void ThrowTypeError(const char* errmsg);
@@ -677,7 +701,9 @@ class Environment {
   inline v8::Local<v8::FunctionTemplate>
       NewFunctionTemplate(v8::FunctionCallback callback,
                           v8::Local<v8::Signature> signature =
-                              v8::Local<v8::Signature>());
+                              v8::Local<v8::Signature>(),
+                          v8::ConstructorBehavior behavior =
+                              v8::ConstructorBehavior::kAllow);
 
   // Convenience methods for NewFunctionTemplate().
   inline void SetMethod(v8::Local<v8::Object> that,
@@ -763,6 +789,10 @@ class Environment {
 
   v8::Local<v8::Value> GetNow();
 
+  inline void AddCleanupHook(void (*fn)(void*), void* arg);
+  inline void RemoveCleanupHook(void (*fn)(void*), void* arg);
+  void RunCleanup();
+
  private:
   inline void CreateImmediate(native_immediate_callback cb,
                               void* data,
@@ -774,6 +804,7 @@ class Environment {
 
   v8::Isolate* const isolate_;
   IsolateData* const isolate_data_;
+  tracing::Agent* const tracing_agent_;
   uv_check_t immediate_check_handle_;
   uv_idle_t immediate_idle_handle_;
   uv_prepare_t idle_prepare_handle_;
@@ -795,7 +826,8 @@ class Environment {
   int should_not_abort_scope_counter_ = 0;
 
   std::unique_ptr<performance::performance_state> performance_state_;
-  std::map<std::string, uint64_t> performance_marks_;
+  std::unordered_map<std::string, uint64_t> performance_marks_;
+  bool can_call_into_js_ = true;
 
 #if HAVE_INSPECTOR
   std::unique_ptr<inspector::Agent> inspector_agent_;
@@ -811,18 +843,16 @@ class Environment {
   HandleWrapQueue handle_wrap_queue_;
   ReqWrapQueue req_wrap_queue_;
   std::list<HandleCleanup> handle_cleanup_queue_;
-  int handle_cleanup_waiting_;
+  int handle_cleanup_waiting_ = 0;
+  int request_waiting_ = 0;
 
   double* heap_statistics_buffer_ = nullptr;
   double* heap_space_statistics_buffer_ = nullptr;
 
   char* http_parser_buffer_;
   bool http_parser_buffer_in_use_ = false;
-  std::unique_ptr<http2::http2_state> http2_state_;
+  std::unique_ptr<http2::Http2State> http2_state_;
 
-  // stat fields contains twice the number of entries because `fs.StatWatcher`
-  // needs room to store data for *two* `fs.Stats` instances.
-  static const int kFsStatsFieldsLength = 2 * 14;
   AliasedBuffer<double, v8::Float64Array> fs_stats_field_array_;
 
   std::vector<std::unique_ptr<fs::FileHandleReadWrap>>
@@ -852,6 +882,32 @@ class Environment {
   std::vector<NativeImmediateCallback> native_immediate_callbacks_;
   void RunAndClearNativeImmediates();
   static void CheckImmediate(uv_check_t* handle);
+
+  struct CleanupHookCallback {
+    void (*fn_)(void*);
+    void* arg_;
+
+    // We keep track of the insertion order for these objects, so that we can
+    // call the callbacks in reverse order when we are cleaning up.
+    uint64_t insertion_order_counter_;
+
+    // Only hashes `arg_`, since that is usually enough to identify the hook.
+    struct Hash {
+      inline size_t operator()(const CleanupHookCallback& cb) const;
+    };
+
+    // Compares by `fn_` and `arg_` being equal.
+    struct Equal {
+      inline bool operator()(const CleanupHookCallback& a,
+                             const CleanupHookCallback& b) const;
+    };
+  };
+
+  // Use an unordered_set, so that we have efficient insertion and removal.
+  std::unordered_set<CleanupHookCallback,
+                     CleanupHookCallback::Hash,
+                     CleanupHookCallback::Equal> cleanup_hooks_;
+  uint64_t cleanup_hook_counter_ = 0;
 
   static void EnvPromiseHook(v8::PromiseHookType type,
                              v8::Local<v8::Promise> promise,

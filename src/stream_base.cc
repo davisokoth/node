@@ -3,6 +3,8 @@
 
 #include "node.h"
 #include "node_buffer.h"
+#include "node_errors.h"
+#include "node_internals.h"
 #include "env-inl.h"
 #include "js_stream.h"
 #include "string_bytes.h"
@@ -60,12 +62,11 @@ int StreamBase::Shutdown(const FunctionCallbackInfo<Value>& args) {
 inline void SetWriteResultPropertiesOnWrapObject(
     Environment* env,
     Local<Object> req_wrap_obj,
-    const StreamWriteResult& res,
-    size_t bytes) {
+    const StreamWriteResult& res) {
   req_wrap_obj->Set(
       env->context(),
       env->bytes_string(),
-      Number::New(env->isolate(), bytes)).FromJust();
+      Number::New(env->isolate(), res.bytes)).FromJust();
   req_wrap_obj->Set(
       env->context(),
       env->async(),
@@ -91,7 +92,6 @@ int StreamBase::Writev(const FunctionCallbackInfo<Value>& args) {
   MaybeStackBuffer<uv_buf_t, 16> bufs(count);
 
   size_t storage_size = 0;
-  uint32_t bytes = 0;
   size_t offset;
 
   if (!all_buffers) {
@@ -123,7 +123,6 @@ int StreamBase::Writev(const FunctionCallbackInfo<Value>& args) {
       Local<Value> chunk = chunks->Get(i);
       bufs[i].base = Buffer::Data(chunk);
       bufs[i].len = Buffer::Length(chunk);
-      bytes += bufs[i].len;
     }
   }
 
@@ -140,7 +139,6 @@ int StreamBase::Writev(const FunctionCallbackInfo<Value>& args) {
       if (Buffer::HasInstance(chunk)) {
         bufs[i].base = Buffer::Data(chunk);
         bufs[i].len = Buffer::Length(chunk);
-        bytes += bufs[i].len;
         continue;
       }
 
@@ -160,12 +158,11 @@ int StreamBase::Writev(const FunctionCallbackInfo<Value>& args) {
       bufs[i].base = str_storage;
       bufs[i].len = str_size;
       offset += str_size;
-      bytes += str_size;
     }
   }
 
   StreamWriteResult res = Write(*bufs, count, nullptr, req_wrap_obj);
-  SetWriteResultPropertiesOnWrapObject(env, req_wrap_obj, res, bytes);
+  SetWriteResultPropertiesOnWrapObject(env, req_wrap_obj, res);
   if (res.wrap != nullptr && storage) {
     res.wrap->SetAllocatedStorage(storage.release(), storage_size);
   }
@@ -179,7 +176,7 @@ int StreamBase::WriteBuffer(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
 
   if (!args[1]->IsUint8Array()) {
-    env->ThrowTypeError("Second argument must be a buffer");
+    node::THROW_ERR_INVALID_ARG_TYPE(env, "Second argument must be a buffer");
     return 0;
   }
 
@@ -193,7 +190,7 @@ int StreamBase::WriteBuffer(const FunctionCallbackInfo<Value>& args) {
 
   if (res.async)
     req_wrap_obj->Set(env->context(), env->buffer_string(), args[1]).FromJust();
-  SetWriteResultPropertiesOnWrapObject(env, req_wrap_obj, res, buf.len);
+  SetWriteResultPropertiesOnWrapObject(env, req_wrap_obj, res);
 
   return res.err;
 }
@@ -228,6 +225,7 @@ int StreamBase::WriteString(const FunctionCallbackInfo<Value>& args) {
   // Try writing immediately if write size isn't too big
   char stack_storage[16384];  // 16kb
   size_t data_size;
+  size_t synchronously_written = 0;
   uv_buf_t buf;
 
   bool try_write = storage_size <= sizeof(stack_storage) &&
@@ -243,6 +241,11 @@ int StreamBase::WriteString(const FunctionCallbackInfo<Value>& args) {
     uv_buf_t* bufs = &buf;
     size_t count = 1;
     err = DoTryWrite(&bufs, &count);
+    // Keep track of the bytes written here, because we're taking a shortcut
+    // by using `DoTryWrite()` directly instead of using the utilities
+    // provided by `Write()`.
+    synchronously_written = count == 0 ? data_size : data_size - buf.len;
+    bytes_written_ += synchronously_written;
 
     // Immediate failure or success
     if (err != 0 || count == 0) {
@@ -283,12 +286,6 @@ int StreamBase::WriteString(const FunctionCallbackInfo<Value>& args) {
   uv_stream_t* send_handle = nullptr;
 
   if (IsIPCPipe() && !send_handle_obj.IsEmpty()) {
-    // TODO(addaleax): This relies on the fact that HandleWrap comes first
-    // as a superclass of each individual subclass.
-    // There are similar assumptions in other places in the code base.
-    // A better idea would be having all BaseObject's internal pointers
-    // refer to the BaseObject* itself; this would require refactoring
-    // throughout the code base but makes Node rely much less on C++ quirks.
     HandleWrap* wrap;
     ASSIGN_OR_RETURN_UNWRAP(&wrap, send_handle_obj, UV_EINVAL);
     send_handle = reinterpret_cast<uv_stream_t*>(wrap->GetHandle());
@@ -298,8 +295,9 @@ int StreamBase::WriteString(const FunctionCallbackInfo<Value>& args) {
   }
 
   StreamWriteResult res = Write(&buf, 1, send_handle, req_wrap_obj);
+  res.bytes += synchronously_written;
 
-  SetWriteResultPropertiesOnWrapObject(env, req_wrap_obj, res, data_size);
+  SetWriteResultPropertiesOnWrapObject(env, req_wrap_obj, res);
   if (res.wrap != nullptr) {
     res.wrap->SetAllocatedStorage(data.release(), data_size);
   }

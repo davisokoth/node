@@ -17,8 +17,8 @@ The sandboxed code uses a different V8 Context, meaning that
 it has a different global object than the rest of the code.
 
 One can provide the context by ["contextifying"][contextified] a sandbox
-object. The sandboxed code treats any property on the sandbox like a
-global variable. Any changes on global variables caused by the sandboxed
+object. The sandboxed code treats any property in the sandbox like a
+global variable. Any changes to global variables caused by the sandboxed
 code are reflected in the sandbox object.
 
 ```js
@@ -159,16 +159,56 @@ const contextifiedSandbox = vm.createContext({ secret: 42 });
 
 * `code` {string} JavaScript Module code to parse
 * `options`
-  * `url` {string} URL used in module resolution and stack traces. **Default**:
+  * `url` {string} URL used in module resolution and stack traces. **Default:**
     `'vm:module(i)'` where `i` is a context-specific ascending index.
   * `context` {Object} The [contextified][] object as returned by the
-    `vm.createContext()` method, to compile and evaluate this Module in.
+    `vm.createContext()` method, to compile and evaluate this `Module` in.
   * `lineOffset` {integer} Specifies the line number offset that is displayed
-    in stack traces produced by this Module.
-  * `columnOffset` {integer} Spcifies the column number offset that is displayed
-    in stack traces produced by this Module.
+    in stack traces produced by this `Module`.
+  * `columnOffset` {integer} Specifies the column number offset that is
+    displayed in stack traces produced by this `Module`.
+  * `initalizeImportMeta` {Function} Called during evaluation of this `Module`
+    to initialize the `import.meta`. This function has the signature `(meta,
+    module)`, where `meta` is the `import.meta` object in the `Module`, and
+    `module` is this `vm.Module` object.
 
 Creates a new ES `Module` object.
+
+*Note*: Properties assigned to the `import.meta` object that are objects may
+allow the `Module` to access information outside the specified `context`, if the
+object is created in the top level context. Use `vm.runInContext()` to create
+objects in a specific context.
+
+```js
+const vm = require('vm');
+
+const contextifiedSandbox = vm.createContext({ secret: 42 });
+
+(async () => {
+  const module = new vm.Module(
+    'Object.getPrototypeOf(import.meta.prop).secret = secret;',
+    {
+      initializeImportMeta(meta) {
+        // Note: this object is created in the top context. As such,
+        // Object.getPrototypeOf(import.meta.prop) points to the
+        // Object.prototype in the top context rather than that in
+        // the sandbox.
+        meta.prop = {};
+      }
+    });
+  // Since module has no dependencies, the linker function will never be called.
+  await module.link(() => {});
+  module.initialize();
+  await module.evaluate();
+
+  // Now, Object.prototype.secret will be equal to 42.
+  //
+  // To fix this problem, replace
+  //     meta.prop = {};
+  // above with
+  //     meta.prop = vm.runInContext('{}', contextifiedSandbox);
+})();
+```
 
 ### module.dependencySpecifiers
 
@@ -177,8 +217,8 @@ Creates a new ES `Module` object.
 The specifiers of all dependencies of this module. The returned array is frozen
 to disallow any changes to it.
 
-Corresponds to the [[RequestedModules]] field of [Source Text Module Record][]s
-in the ECMAScript specification.
+Corresponds to the `[[RequestedModules]]` field of
+[Source Text Module Record][]s in the ECMAScript specification.
 
 ### module.error
 
@@ -191,7 +231,7 @@ accessing this property will result in a thrown exception.
 The value `undefined` cannot be used for cases where there is not a thrown
 exception due to possible ambiguity with `throw undefined;`.
 
-Corresponds to the [[EvaluationError]] field of [Source Text Module Record][]s
+Corresponds to the `[[EvaluationError]]` field of [Source Text Module Record][]s
 in the ECMAScript specification.
 
 ### module.linkingStatus
@@ -206,8 +246,8 @@ The current linking status of `module`. It will be one of the following values:
 - `'linked'`: `module.link()` has been called, and all its dependencies have
   been successfully linked.
 - `'errored'`: `module.link()` has been called, but at least one of its
-  dependencies failed to link, either because the callback returned a Promise
-  that is rejected, or because the Module the callback returned is invalid.
+  dependencies failed to link, either because the callback returned a `Promise`
+  that is rejected, or because the `Module` the callback returned is invalid.
 
 ### module.namespace
 
@@ -249,9 +289,9 @@ The current status of the module. Will be one of:
 - `'errored'`: The module has been evaluated, but an exception was thrown.
 
 Other than `'errored'`, this status string corresponds to the specification's
-[Source Text Module Record][]'s [[Status]] field. `'errored'` corresponds to
-`'evaluated'` in the specification, but with [[EvaluationError]] set to a value
-that is not `undefined`.
+[Source Text Module Record][]'s `[[Status]]` field. `'errored'` corresponds to
+`'evaluated'` in the specification, but with `[[EvaluationError]]` set to a
+value that is not `undefined`.
 
 ### module.url
 
@@ -267,7 +307,7 @@ The URL of the current module, as set in the constructor.
     will be thrown.
   * `breakOnSigint` {boolean} If `true`, the execution will be terminated when
     `SIGINT` (Ctrl+C) is received. Existing handlers for the event that have
-    been attached via `process.on("SIGINT")` will be disabled during script
+    been attached via `process.on('SIGINT')` will be disabled during script
     execution, but will continue to work after that. If execution is
     interrupted, an [`Error`][] will be thrown.
 * Returns: {Promise}
@@ -428,10 +468,9 @@ changes:
     will be thrown.
   * `breakOnSigint`: if `true`, the execution will be terminated when
     `SIGINT` (Ctrl+C) is received. Existing handlers for the
-    event that have been attached via `process.on("SIGINT")` will be disabled
+    event that have been attached via `process.on('SIGINT')` will be disabled
     during script execution, but will continue to work after that.
     If execution is terminated, an [`Error`][] will be thrown.
-
 
 Runs the compiled code contained by the `vm.Script` object within the given
 `contextifiedSandbox` and returns the result. Running code does not have access
@@ -470,7 +509,7 @@ overhead.
 <!-- YAML
 added: v0.3.1
 changes:
-  - version: REPLACEME
+  - version: v10.0.0
     pr-url: https://github.com/nodejs/node/pull/19016
     description: The `contextCodeGeneration` option is supported now.
 -->
@@ -502,11 +541,9 @@ changes:
   * `contextCodeGeneration` {Object}
     * `strings` {boolean} If set to false any calls to `eval` or function
       constructors (`Function`, `GeneratorFunction`, etc) will throw an
-      `EvalError`.
-      **Default**: `true`.
+      `EvalError`. **Default:** `true`.
     * `wasm` {boolean} If set to false any attempt to compile a WebAssembly
-      module will throw a `WebAssembly.CompileError`.
-      **Default**: `true`.
+      module will throw a `WebAssembly.CompileError`. **Default:** `true`.
 
 First contextifies the given `sandbox`, runs the compiled code contained by
 the `vm.Script` object within the created sandbox, and returns the result.
@@ -578,7 +615,10 @@ console.log(globalVar);
 <!-- YAML
 added: v0.3.1
 changes:
-  - version: REPLACEME
+  - version: v10.0.0
+    pr-url: https://github.com/nodejs/node/pull/19398
+    description: The `sandbox` option can no longer be a function.
+  - version: v10.0.0
     pr-url: https://github.com/nodejs/node/pull/19016
     description: The `codeGeneration` option is supported now.
 -->
@@ -597,11 +637,9 @@ changes:
   * `codeGeneration` {Object}
     * `strings` {boolean} If set to false any calls to `eval` or function
       constructors (`Function`, `GeneratorFunction`, etc) will throw an
-      `EvalError`.
-      **Default**: `true`.
+      `EvalError`. **Default:** `true`.
     * `wasm` {boolean} If set to false any attempt to compile a WebAssembly
-      module will throw a `WebAssembly.CompileError`.
-      **Default**: `true`.
+      module will throw a `WebAssembly.CompileError`. **Default:** `true`.
 
 If given a `sandbox` object, the `vm.createContext()` method will [prepare
 that sandbox][contextified] so that it can be used in calls to
@@ -645,6 +683,7 @@ added: v0.11.7
 -->
 
 * `sandbox` {Object}
+* Returns: {boolean}
 
 Returns `true` if the given `sandbox` object has been [contextified][] using
 [`vm.createContext()`][].
@@ -654,7 +693,7 @@ Returns `true` if the given `sandbox` object has been [contextified][] using
 * `code` {string} The JavaScript code to compile and run.
 * `contextifiedSandbox` {Object} The [contextified][] object that will be used
   as the `global` when the `code` is compiled and run.
-* `options`
+* `options` {Object|string}
   * `filename` {string} Specifies the filename used in stack traces produced
     by this script.
   * `lineOffset` {number} Specifies the line number offset that is displayed
@@ -672,6 +711,8 @@ The `vm.runInContext()` method compiles `code`, runs it within the context of
 the `contextifiedSandbox`, then returns the result. Running code does not have
 access to the local scope. The `contextifiedSandbox` object *must* have been
 previously [contextified][] using the [`vm.createContext()`][] method.
+
+If `options` is a string, then it specifies the filename.
 
 The following example compiles and executes different scripts using a single
 [contextified][] object:
@@ -699,7 +740,7 @@ added: v0.3.1
 * `code` {string} The JavaScript code to compile and run.
 * `sandbox` {Object} An object that will be [contextified][]. If `undefined`, a
   new object will be created.
-* `options`
+* `options` {Object|string}
   * `filename` {string} Specifies the filename used in stack traces produced
     by this script.
   * `lineOffset` {number} Specifies the line number offset that is displayed
@@ -727,6 +768,8 @@ creates a new `sandbox` if passed as `undefined`), compiles the `code`, runs it
 within the context of the created context, then returns the result. Running code
 does not have access to the local scope.
 
+If `options` is a string, then it specifies the filename.
+
 The following example compiles and executes code that increments a global
 variable and sets a new one. These globals are contained in the `sandbox`.
 
@@ -751,7 +794,7 @@ added: v0.3.1
 -->
 
 * `code` {string} The JavaScript code to compile and run.
-* `options`
+* `options` {Object|string}
   * `filename` {string} Specifies the filename used in stack traces produced
     by this script.
   * `lineOffset` {number} Specifies the line number offset that is displayed
@@ -768,6 +811,8 @@ added: v0.3.1
 `vm.runInThisContext()` compiles `code`, runs it within the context of the
 current `global` and returns the result. Running code does not have access to
 local scope, but does have access to the current `global` object.
+
+If `options` is a string, then it specifies the filename.
 
 The following example illustrates using both `vm.runInThisContext()` and
 the JavaScript [`eval()`][] function to run the same code:
@@ -822,7 +867,7 @@ const code = `
 })`;
 
 vm.runInThisContext(code)(require);
- ```
+```
 
 The `require()` in the above case shares the state with the context it is
 passed from. This may introduce risks when untrusted code is executed, e.g.
@@ -850,7 +895,7 @@ associating it with the `sandbox` object is what this document refers to as
 [`eval()`]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/eval
 [`script.runInContext()`]: #vm_script_runincontext_contextifiedsandbox_options
 [`script.runInThisContext()`]: #vm_script_runinthiscontext_options
-[`url.origin`]: https://nodejs.org/api/url.html#url_url_origin
+[`url.origin`]: url.html#url_url_origin
 [`vm.createContext()`]: #vm_vm_createcontext_sandbox_options
 [`vm.runInContext()`]: #vm_vm_runincontext_code_contextifiedsandbox_options
 [`vm.runInThisContext()`]: #vm_vm_runinthiscontext_code_options
@@ -859,9 +904,9 @@ associating it with the `sandbox` object is what this document refers to as
 [Evaluate() concrete method]: https://tc39.github.io/ecma262/#sec-moduleevaluation
 [HostResolveImportedModule]: https://tc39.github.io/ecma262/#sec-hostresolveimportedmodule
 [Instantiate() concrete method]: https://tc39.github.io/ecma262/#sec-moduledeclarationinstantiation
+[Source Text Module Record]: https://tc39.github.io/ecma262/#sec-source-text-module-records
 [V8 Embedder's Guide]: https://github.com/v8/v8/wiki/Embedder's%20Guide#contexts
 [contextified]: #vm_what_does_it_mean_to_contextify_an_object
 [global object]: https://es5.github.io/#x15.1
 [indirect `eval()` call]: https://es5.github.io/#x10.4.2
 [origin]: https://developer.mozilla.org/en-US/docs/Glossary/Origin
-[Source Text Module Record]: https://tc39.github.io/ecma262/#sec-source-text-module-records

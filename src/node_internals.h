@@ -25,6 +25,7 @@
 #if defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
 
 #include "node.h"
+#include "node_mutex.h"
 #include "node_persistent.h"
 #include "util-inl.h"
 #include "env-inl.h"
@@ -33,6 +34,7 @@
 #include "tracing/trace_event.h"
 #include "node_perf_common.h"
 #include "node_debug_options.h"
+#include "node_api.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -171,6 +173,11 @@ extern std::string openssl_config;
 // that is used by lib/module.js
 extern bool config_preserve_symlinks;
 
+// Set in node.cc by ParseArgs when --preserve-symlinks-main is used.
+// Used in node_config.cc to set a constant on process.binding('config')
+// that is used by lib/module.js
+extern bool config_preserve_symlinks_main;
+
 // Set in node.cc by ParseArgs when --experimental-modules is used.
 // Used in node_config.cc to set a constant on process.binding('config')
 // that is used by lib/module.js
@@ -180,6 +187,11 @@ extern bool config_experimental_modules;
 // Used in node_config.cc to set a constant on process.binding('config')
 // that is used by lib/vm.js
 extern bool config_experimental_vm_modules;
+
+// Set in node.cc by ParseArgs when --experimental-repl-await is used.
+// Used in node_config.cc to set a constant on process.binding('config')
+// that is used by lib/repl.js.
+extern bool config_experimental_repl_await;
 
 // Set in node.cc by ParseArgs when --loader is used.
 // Used in node_config.cc to set a constant on process.binding('config')
@@ -220,14 +232,6 @@ inline v8::Local<TypeName> PersistentToLocal(
     v8::Isolate* isolate,
     const Persistent<TypeName>& persistent);
 
-// Creates a new context with Node.js-specific tweaks.  Currently, it removes
-// the `v8BreakIterator` property from the global `Intl` object if present.
-// See https://github.com/nodejs/node/issues/14909 for more info.
-v8::Local<v8::Context> NewContext(
-    v8::Isolate* isolate,
-    v8::Local<v8::ObjectTemplate> object_template =
-        v8::Local<v8::ObjectTemplate>());
-
 // Convert a struct sockaddr to a { address: '1.2.3.4', port: 1234 } JS object.
 // Sets address and port properties on the info object and returns it.
 // If |info| is omitted, a new object is returned.
@@ -238,9 +242,10 @@ v8::Local<v8::Object> AddressToJS(
 
 template <typename T, int (*F)(const typename T::HandleType*, sockaddr*, int*)>
 void GetSockOrPeerName(const v8::FunctionCallbackInfo<v8::Value>& args) {
-  T* const wrap = Unwrap<T>(args.Holder());
-  if (wrap == nullptr)
-    return args.GetReturnValue().Set(UV_EBADF);
+  T* wrap;
+  ASSIGN_OR_RETURN_UNWRAP(&wrap,
+                          args.Holder(),
+                          args.GetReturnValue().Set(UV_EBADF));
   CHECK(args[0]->IsObject());
   sockaddr_storage storage;
   int addrlen = sizeof(storage);
@@ -307,8 +312,50 @@ v8::Maybe<bool> ProcessEmitDeprecationWarning(Environment* env,
                                               const char* warning,
                                               const char* deprecation_code);
 
-void FillStatsArray(AliasedBuffer<double, v8::Float64Array>* fields_ptr,
-                    const uv_stat_t* s, int offset = 0);
+template <typename NativeT, typename V8T>
+v8::Local<v8::Value> FillStatsArray(AliasedBuffer<NativeT, V8T>* fields_ptr,
+                    const uv_stat_t* s, int offset = 0) {
+  AliasedBuffer<NativeT, V8T>& fields = *fields_ptr;
+  fields[offset + 0] = s->st_dev;
+  fields[offset + 1] = s->st_mode;
+  fields[offset + 2] = s->st_nlink;
+  fields[offset + 3] = s->st_uid;
+  fields[offset + 4] = s->st_gid;
+  fields[offset + 5] = s->st_rdev;
+#if defined(__POSIX__)
+  fields[offset + 6] = s->st_blksize;
+#else
+  fields[offset + 6] = -1;
+#endif
+  fields[offset + 7] = s->st_ino;
+  fields[offset + 8] = s->st_size;
+#if defined(__POSIX__)
+  fields[offset + 9] = s->st_blocks;
+#else
+  fields[offset + 9] = -1;
+#endif
+// Dates.
+// NO-LINT because the fields are 'long' and we just want to cast to `unsigned`
+#define X(idx, name)                                                    \
+  /* NOLINTNEXTLINE(runtime/int) */                                     \
+  fields[offset + idx] = ((unsigned long)(s->st_##name.tv_sec) * 1e3) + \
+  /* NOLINTNEXTLINE(runtime/int) */                                     \
+                ((unsigned long)(s->st_##name.tv_nsec) / 1e6);          \
+
+  X(10, atim)
+  X(11, mtim)
+  X(12, ctim)
+  X(13, birthtim)
+#undef X
+
+  return fields_ptr->GetJSArray();
+}
+
+inline v8::Local<v8::Value> FillGlobalStatsArray(Environment* env,
+                                                 const uv_stat_t* s,
+                                                 int offset = 0) {
+  return node::FillStatsArray(env->fs_stats_field_array(), s, offset);
+}
 
 void SetupProcessObject(Environment* env,
                         int argc,
@@ -452,6 +499,41 @@ class InternalCallbackScope {
   bool pushed_ids_ = false;
   bool closed_ = false;
 };
+
+class ThreadPoolWork {
+ public:
+  explicit inline ThreadPoolWork(Environment* env) : env_(env) {}
+  inline void ScheduleWork();
+  inline int CancelWork();
+
+  virtual void DoThreadPoolWork() = 0;
+  virtual void AfterThreadPoolWork(int status) = 0;
+
+ private:
+  Environment* env_;
+  uv_work_t work_req_;
+};
+
+void ThreadPoolWork::ScheduleWork() {
+  env_->IncreaseWaitingRequestCounter();
+  int status = uv_queue_work(
+      env_->event_loop(),
+      &work_req_,
+      [](uv_work_t* req) {
+        ThreadPoolWork* self = ContainerOf(&ThreadPoolWork::work_req_, req);
+        self->DoThreadPoolWork();
+      },
+      [](uv_work_t* req, int status) {
+        ThreadPoolWork* self = ContainerOf(&ThreadPoolWork::work_req_, req);
+        self->env_->DecreaseWaitingRequestCounter();
+        self->AfterThreadPoolWork(status);
+      });
+  CHECK_EQ(status, 0);
+}
+
+int ThreadPoolWork::CancelWork() {
+  return uv_cancel(reinterpret_cast<uv_req_t*>(&work_req_));
+}
 
 static inline const char *errno_string(int errorno) {
 #define ERRNO_CASE(e)  case e: return #e;
@@ -793,6 +875,10 @@ static inline const char *errno_string(int errorno) {
 
 }  // namespace node
 
+void napi_module_register_by_symbol(v8::Local<v8::Object> exports,
+                                    v8::Local<v8::Value> module,
+                                    v8::Local<v8::Context> context,
+                                    napi_addon_register_func init);
 
 #endif  // defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
 

@@ -39,7 +39,6 @@
       'lib/domain.js',
       'lib/events.js',
       'lib/fs.js',
-      'lib/fs/promises.js',
       'lib/http.js',
       'lib/http2.js',
       'lib/_http_agent.js',
@@ -73,14 +72,17 @@
       'lib/tls.js',
       'lib/_tls_common.js',
       'lib/_tls_wrap.js',
+      'lib/trace_events.js',
       'lib/tty.js',
       'lib/url.js',
       'lib/util.js',
       'lib/v8.js',
       'lib/vm.js',
       'lib/zlib.js',
+      'lib/internal/assert.js',
       'lib/internal/async_hooks.js',
       'lib/internal/buffer.js',
+      'lib/internal/cli_table.js',
       'lib/internal/child_process.js',
       'lib/internal/cluster/child.js',
       'lib/internal/cluster/master.js',
@@ -99,23 +101,31 @@
       'lib/internal/constants.js',
       'lib/internal/encoding.js',
       'lib/internal/errors.js',
+      'lib/internal/fixed_queue.js',
       'lib/internal/freelist.js',
-      'lib/internal/fs.js',
+      'lib/internal/fs/promises.js',
+      'lib/internal/fs/read_file_context.js',
+      'lib/internal/fs/streams.js',
+      'lib/internal/fs/sync_write_stream.js',
+      'lib/internal/fs/utils.js',
+      'lib/internal/fs/watchers.js',
       'lib/internal/http.js',
       'lib/internal/inspector_async_hook.js',
       'lib/internal/linkedlist.js',
       'lib/internal/modules/cjs/helpers.js',
       'lib/internal/modules/cjs/loader.js',
-      'lib/internal/modules/esm/Loader.js',
-      'lib/internal/modules/esm/CreateDynamicModule.js',
-      'lib/internal/modules/esm/DefaultResolve.js',
-      'lib/internal/modules/esm/ModuleJob.js',
-      'lib/internal/modules/esm/ModuleMap.js',
-      'lib/internal/modules/esm/Translators.js',
+      'lib/internal/modules/esm/loader.js',
+      'lib/internal/modules/esm/create_dynamic_module.js',
+      'lib/internal/modules/esm/default_resolve.js',
+      'lib/internal/modules/esm/module_job.js',
+      'lib/internal/modules/esm/module_map.js',
+      'lib/internal/modules/esm/translators.js',
       'lib/internal/safe_globals.js',
       'lib/internal/net.js',
       'lib/internal/os.js',
+      'lib/internal/priority_queue.js',
       'lib/internal/process/esm_loader.js',
+      'lib/internal/process/methods.js',
       'lib/internal/process/next_tick.js',
       'lib/internal/process/promises.js',
       'lib/internal/process/stdio.js',
@@ -132,6 +142,7 @@
       'lib/internal/timers.js',
       'lib/internal/tls.js',
       'lib/internal/trace_events_async_hooks.js',
+      'lib/internal/tty.js',
       'lib/internal/url.js',
       'lib/internal/util.js',
       'lib/internal/util/comparisons.js',
@@ -140,18 +151,20 @@
       'lib/internal/http2/core.js',
       'lib/internal/http2/compat.js',
       'lib/internal/http2/util.js',
-      'lib/internal/v8.js',
       'lib/internal/v8_prof_polyfill.js',
       'lib/internal/v8_prof_processor.js',
-      'lib/internal/vm/Module.js',
+      'lib/internal/validators.js',
+      'lib/internal/stream_base_commons.js',
+      'lib/internal/vm/module.js',
       'lib/internal/streams/lazy_transform.js',
       'lib/internal/streams/async_iterator.js',
-      'lib/internal/streams/BufferList.js',
-      'lib/internal/streams/duplex_base.js',
+      'lib/internal/streams/buffer_list.js',
       'lib/internal/streams/duplexpair.js',
       'lib/internal/streams/legacy.js',
       'lib/internal/streams/destroy.js',
       'lib/internal/streams/state.js',
+      'lib/internal/streams/pipeline.js',
+      'lib/internal/streams/end-of-stream.js',
       'lib/internal/wrap_js_stream.js',
       'deps/v8/tools/splaytree.js',
       'deps/v8/tools/codemap.js',
@@ -296,10 +309,12 @@
 
       'sources': [
         'src/async_wrap.cc',
+        'src/callback_scope.cc',
         'src/cares_wrap.cc',
         'src/connection_wrap.cc',
         'src/connect_wrap.cc',
         'src/env.cc',
+        'src/exceptions.cc',
         'src/fs_event_wrap.cc',
         'src/handle_wrap.cc',
         'src/js_stream.cc',
@@ -314,6 +329,7 @@
         'src/node_contextify.cc',
         'src/node_debug_options.cc',
         'src/node_domain.cc',
+        'src/node_errors.h',
         'src/node_file.cc',
         'src/node_http2.cc',
         'src/node_http_parser.cc',
@@ -337,7 +353,6 @@
         'src/spawn_sync.cc',
         'src/string_bytes.cc',
         'src/string_decoder.cc',
-        'src/string_search.cc',
         'src/stream_base.cc',
         'src/stream_pipe.cc',
         'src/stream_wrap.cc',
@@ -357,10 +372,12 @@
         'src/async_wrap-inl.h',
         'src/base_object.h',
         'src/base_object-inl.h',
+        'src/callback_scope.h',
         'src/connection_wrap.h',
         'src/connect_wrap.h',
         'src/env.h',
         'src/env-inl.h',
+        'src/exceptions.h',
         'src/handle_wrap.h',
         'src/js_stream.h',
         'src/module_wrap.h',
@@ -446,17 +463,24 @@
             'src/inspector_js_api.cc',
             'src/inspector_socket.cc',
             'src/inspector_socket_server.cc',
+            'src/inspector/tracing_agent.cc',
+            'src/inspector/node_string.cc',
             'src/inspector_agent.h',
             'src/inspector_io.h',
             'src/inspector_socket.h',
             'src/inspector_socket_server.h',
+            'src/inspector/node_string.h',
+            'src/inspector/tracing_agent.h',
+            '<@(node_inspector_generated_sources)'
           ],
           'dependencies': [
+            'node_protocol_generated_sources#host',
             'v8_inspector_compress_protocol_json#host',
           ],
           'include_dirs': [
             '<(SHARED_INTERMEDIATE_DIR)/include', # for inspector
             '<(SHARED_INTERMEDIATE_DIR)',
+            '<(SHARED_INTERMEDIATE_DIR)/src', # for inspector
           ],
         }, {
           'defines': [ 'HAVE_INSPECTOR=0' ]
@@ -585,8 +609,8 @@
             'mkssldef_flags': [
               # Categories to export.
               '-CAES,BF,BIO,DES,DH,DSA,EC,ECDH,ECDSA,ENGINE,EVP,HMAC,MD4,MD5,'
-              'NEXTPROTONEG,PSK,RC2,RC4,RSA,SHA,SHA0,SHA1,SHA256,SHA512,SOCK,'
-              'STDIO,TLSEXT,FP_API',
+              'PSK,RC2,RC4,RSA,SHA,SHA0,SHA1,SHA256,SHA512,SOCK,STDIO,TLSEXT,'
+              'FP_API,TLS1_METHOD,TLS1_1_METHOD,TLS1_2_METHOD',
               # Defines.
               '-DWIN32',
               # Symbols to filter from the export list.
@@ -606,8 +630,8 @@
             {
               'action_name': 'mkssldef',
               'inputs': [
-                'deps/openssl/openssl/util/libeay.num',
-                'deps/openssl/openssl/util/ssleay.num',
+                'deps/openssl/openssl/util/libcrypto.num',
+                'deps/openssl/openssl/util/libssl.num',
               ],
               'outputs': ['<(SHARED_INTERMEDIATE_DIR)/openssl.def'],
               'action': [
@@ -667,33 +691,6 @@
           ],
         } ]
       ]
-    },
-    {
-      'target_name': 'v8_inspector_compress_protocol_json',
-      'type': 'none',
-      'toolsets': ['host'],
-      'conditions': [
-        [ 'v8_enable_inspector==1', {
-          'actions': [
-            {
-              'action_name': 'v8_inspector_compress_protocol_json',
-              'process_outputs_as_sources': 1,
-              'inputs': [
-                'deps/v8/src/inspector/js_protocol.json',
-              ],
-              'outputs': [
-                '<(SHARED_INTERMEDIATE_DIR)/v8_inspector_protocol_json.h',
-              ],
-              'action': [
-                'python',
-                'tools/compress_json.py',
-                '<@(_inputs)',
-                '<@(_outputs)',
-              ],
-            },
-          ],
-        }],
-      ],
     },
     {
       'target_name': 'node_js2c',
@@ -934,6 +931,7 @@
         'test/cctest/test_base64.cc',
         'test/cctest/test_node_postmortem_metadata.cc',
         'test/cctest/test_environment.cc',
+        'test/cctest/test_platform.cc',
         'test/cctest/test_util.cc',
         'test/cctest/test_url.cc'
       ],
@@ -967,6 +965,7 @@
 
   'conditions': [
     [ 'OS=="aix" and node_shared=="true"', {
+      'variables': {'real_os_name': '<!(uname -s)',},
       'targets': [
         {
           'target_name': 'node_aix_shared',
@@ -985,7 +984,14 @@
               'ldflags': [
                 '-Wl,-blibpath:/usr/lib:/lib:/opt/freeware/lib/pthread'
               ],
-            }]
+            }],
+            ['"<(real_os_name)"=="OS400"', {
+              'ldflags': [
+                '-Wl,-blibpath:/QOpenSys/pkgs/lib:/QOpenSys/usr/lib',
+                '-Wl,-bbigtoc',
+                '-Wl,-brtl',
+              ],
+            }],
           ],
           'includes': [
             'node.gypi'
@@ -1005,5 +1011,163 @@
         },
       ]
     }], # end aix section
+    [ 'v8_enable_inspector==1', {
+      'variables': {
+        'protocol_path': 'deps/v8/third_party/inspector_protocol',
+        'node_inspector_path': 'src/inspector',
+        'node_inspector_generated_sources': [
+          '<(SHARED_INTERMEDIATE_DIR)/src/node/inspector/protocol/Forward.h',
+          '<(SHARED_INTERMEDIATE_DIR)/src/node/inspector/protocol/Protocol.cpp',
+          '<(SHARED_INTERMEDIATE_DIR)/src/node/inspector/protocol/Protocol.h',
+          '<(SHARED_INTERMEDIATE_DIR)/src/node/inspector/protocol/NodeTracing.cpp',
+          '<(SHARED_INTERMEDIATE_DIR)/src/node/inspector/protocol/NodeTracing.h',
+        ],
+        'node_protocol_files': [
+          '<(protocol_path)/lib/Allocator_h.template',
+          '<(protocol_path)/lib/Array_h.template',
+          '<(protocol_path)/lib/Collections_h.template',
+          '<(protocol_path)/lib/DispatcherBase_cpp.template',
+          '<(protocol_path)/lib/DispatcherBase_h.template',
+          '<(protocol_path)/lib/ErrorSupport_cpp.template',
+          '<(protocol_path)/lib/ErrorSupport_h.template',
+          '<(protocol_path)/lib/Forward_h.template',
+          '<(protocol_path)/lib/FrontendChannel_h.template',
+          '<(protocol_path)/lib/Maybe_h.template',
+          '<(protocol_path)/lib/Object_cpp.template',
+          '<(protocol_path)/lib/Object_h.template',
+          '<(protocol_path)/lib/Parser_cpp.template',
+          '<(protocol_path)/lib/Parser_h.template',
+          '<(protocol_path)/lib/Protocol_cpp.template',
+          '<(protocol_path)/lib/ValueConversions_h.template',
+          '<(protocol_path)/lib/Values_cpp.template',
+          '<(protocol_path)/lib/Values_h.template',
+          '<(protocol_path)/templates/Exported_h.template',
+          '<(protocol_path)/templates/Imported_h.template',
+          '<(protocol_path)/templates/TypeBuilder_cpp.template',
+          '<(protocol_path)/templates/TypeBuilder_h.template',
+          '<(protocol_path)/CodeGenerator.py',
+        ]
+      },
+      'targets': [
+        {
+          'target_name': 'prepare_protocol_json',
+          'type': 'none',
+          'toolsets': ['host'],
+          'copies': [
+            {
+              'files': [
+                '<(node_inspector_path)/node_protocol_config.json',
+                '<(node_inspector_path)/node_protocol.pdl'
+              ],
+              'destination': '<(SHARED_INTERMEDIATE_DIR)',
+            }
+          ],
+          'actions': [
+            {
+              'action_name': 'convert_node_protocol_to_json',
+              'inputs': [
+                '<(SHARED_INTERMEDIATE_DIR)/node_protocol.pdl',
+              ],
+              'outputs': [
+                '<(SHARED_INTERMEDIATE_DIR)/node_protocol.json',
+              ],
+              'action': [
+                'python',
+                'deps/v8/third_party/inspector_protocol/ConvertProtocolToJSON.py',
+                '<@(_inputs)',
+                '<@(_outputs)',
+              ],
+            },
+          ]
+        },
+        {
+          'target_name': 'node_protocol_generated_sources',
+          'type': 'none',
+          'toolsets': ['host'],
+          'dependencies': ['prepare_protocol_json'],
+          'actions': [
+            {
+              'action_name': 'node_protocol_generated_sources',
+              'inputs': [
+                '<(SHARED_INTERMEDIATE_DIR)/node_protocol_config.json',
+                '<(SHARED_INTERMEDIATE_DIR)/node_protocol.json',
+                '<@(node_protocol_files)',
+              ],
+              'outputs': [
+                '<@(node_inspector_generated_sources)',
+              ],
+              'action': [
+                'python',
+                '<(protocol_path)/CodeGenerator.py',
+                '--jinja_dir', '<@(protocol_path)/..',
+                '--output_base', '<(SHARED_INTERMEDIATE_DIR)/src/',
+                '--config', '<(SHARED_INTERMEDIATE_DIR)/node_protocol_config.json',
+              ],
+              'message': 'Generating node protocol sources from protocol json',
+            },
+          ]
+        },
+        {
+          'target_name': 'v8_inspector_compress_protocol_json',
+          'type': 'none',
+          'toolsets': ['host'],
+          'copies': [
+            {
+              'destination': '<(SHARED_INTERMEDIATE_DIR)',
+              'files': ['deps/v8/src/inspector/js_protocol.pdl']
+            }
+          ],
+          'actions': [
+            {
+              'action_name': 'v8_inspector_convert_protocol_to_json',
+              'inputs': [
+                '<(SHARED_INTERMEDIATE_DIR)/js_protocol.pdl',
+              ],
+              'outputs': [
+                '<(SHARED_INTERMEDIATE_DIR)/js_protocol.json',
+              ],
+              'action': [
+                'python',
+                'deps/v8/third_party/inspector_protocol/ConvertProtocolToJSON.py',
+                '<@(_inputs)',
+                '<@(_outputs)',
+              ],
+            },
+            {
+              'action_name': 'concatenate_protocols',
+              'inputs': [
+                '<(SHARED_INTERMEDIATE_DIR)/js_protocol.json',
+                '<(SHARED_INTERMEDIATE_DIR)/node_protocol.json',
+              ],
+              'outputs': [
+                '<(SHARED_INTERMEDIATE_DIR)/concatenated_protocol.json',
+              ],
+              'action': [
+                'python',
+                'deps/v8/third_party/inspector_protocol/ConcatenateProtocols.py',
+                '<@(_inputs)',
+                '<@(_outputs)',
+              ],
+            },
+            {
+              'action_name': 'v8_inspector_compress_protocol_json',
+              'process_outputs_as_sources': 1,
+              'inputs': [
+                '<(SHARED_INTERMEDIATE_DIR)/concatenated_protocol.json',
+              ],
+              'outputs': [
+                '<(SHARED_INTERMEDIATE_DIR)/v8_inspector_protocol_json.h',
+              ],
+              'action': [
+                'python',
+                'tools/compress_json.py',
+                '<@(_inputs)',
+                '<@(_outputs)',
+              ],
+            },
+          ],
+        },
+      ]
+    }]
   ], # end conditions block
 }
